@@ -1,0 +1,71 @@
+# Builds the installer for a version tag (vMAJOR.MINOR.FIX, pushed by Tools/release.sh) and publishes
+# it as a GitHub release. The installer keeps the same name in every release, so
+# https://github.com/<owner>/<repo>/releases/latest/download/<App>.pkg always downloads the newest one.
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish the installer
+    # GitHub's Xcode 27 image (macOS 27, Apple silicon), the Xcode the apps are developed with. It's still
+    # marked preview, so a job can wait 10 minutes or more for a machine to start. Don't switch to
+    # macos-26: its Xcode 26.6 compiler crashes optimizing PuggleDocs for release.
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - name: Check out the tag
+        # actions/checkout v7.0.1, pinned to its commit.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Check that the tag matches the app's version
+        run: |
+          app=$(basename *.xcodeproj .xcodeproj)
+          version=$(grep -o 'MARKETING_VERSION = [^;]*;' "$app.xcodeproj/project.pbxproj" | sort -u | sed -E 's/.* = "?([^";]*)"?;/\1/')
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::The tag is $GITHUB_REF_NAME but the project's MARKETING_VERSION is $version. Release with Tools/release.sh, which keeps them together."
+            exit 1
+          fi
+          echo "APP=$app" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          xcodebuild -version
+
+      # A failure is repeated as an error annotation (its errors, or else the last lines of its output),
+      # so the reason shows on the run's summary page. The installer is built even when tests fail, so one
+      # run reports every problem; nothing is published unless both succeed.
+      - name: Run the package tests
+        run: |
+          set -o pipefail
+          if ! swift test --package-path "Packages/${APP}Kit" 2>&1 | tee "$RUNNER_TEMP/tests.log"; then
+            lines=$(grep -E "error:|✘" "$RUNNER_TEMP/tests.log" | sort -u | head -15 || true)
+            [ -n "$lines" ] || lines=$(tail -25 "$RUNNER_TEMP/tests.log")
+            lines=${lines//'%'/'%25'}; lines=${lines//$'\r'/}; lines=${lines//$'\n'/'%0A'}
+            echo "::error title=Package tests failed::$lines"
+            exit 1
+          fi
+
+      - name: Build the installer
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          if ! Tools/make-installer.sh 2>&1 | tee "$RUNNER_TEMP/installer.log"; then
+            lines=$(grep -E "error:" build/Installer/build.log 2>/dev/null | sort -u | head -15 || true)
+            [ -n "$lines" ] || lines=$(grep -i -E "error|fatal|stack dump|signal|crash|killed|terminat|assert|memory|nonzero" build/Installer/build.log 2>/dev/null | cut -c1-200 | awk '!seen[$0]++' | head -18 || true)
+            [ -n "$lines" ] || lines=$(grep -v -E "^\s*$" build/Installer/build.log 2>/dev/null | cut -c1-200 | tail -18 || true)
+            [ -n "$lines" ] || lines=$(tail -25 "$RUNNER_TEMP/installer.log")
+            lines=${lines//'%'/'%25'}; lines=${lines//$'\r'/}; lines=${lines//$'\n'/'%0A'}
+            echo "::error title=Installer build failed::$lines"
+            exit 1
+          fi
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "build/$APP.pkg" \
+            --verify-tag --latest --generate-notes --title "$APP $VERSION"

@@ -1,0 +1,64 @@
+# Asks everyone who opens a pull request to sign the PuggleSoft Contributor License Agreement (CLA.md).
+# A contributor signs by commenting the sentence below on the pull request. Signatures are kept in
+# signatures/cla.json on the cla-signatures branch, which this workflow creates the first time it runs.
+# Until every author of a pull request's commits has signed, the "CLA" check fails.
+name: CLA
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+# Signatures are written to one file, so runs take turns rather than racing each other.
+concurrency:
+  group: cla-signatures
+  cancel-in-progress: false
+
+jobs:
+  cla:
+    name: CLA
+    runs-on: ubuntu-latest
+    # Pull request events, plus "recheck" or a signature posted on a pull request (not on an issue).
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request &&
+        (github.event.comment.body == 'recheck' ||
+         github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA'))
+    steps:
+      - name: Create the signatures branch if it doesn't exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if ! gh api "repos/$REPO/branches/cla-signatures" --silent 2>/dev/null; then
+            sha=$(gh api "repos/$REPO/git/ref/heads/$DEFAULT_BRANCH" --jq .object.sha)
+            gh api "repos/$REPO/git/refs" -f ref=refs/heads/cla-signatures -f sha="$sha" --silent
+          fi
+
+      - name: Check signatures
+        # contributor-assistant/github-action v2.6.1, pinned to its commit.
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-document: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.event.repository.default_branch }}/CLA.md
+          path-to-signatures: signatures/cla.json
+          branch: cla-signatures
+          allowlist: StaticPrime,*[bot]
+          custom-notsigned-prcomment: >-
+            Thank you for your pull request! Before it can be merged, each person who wrote a commit in it
+            needs to sign the [PuggleSoft Contributor License Agreement](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.event.repository.default_branch }}/CLA.md).
+            You keep the copyright in your work, and PuggleSoft gets the right to use, license and relicense it.
+            To sign, post a comment with exactly this text:
+          create-file-commit-message: Create the CLA signatures file
+          signed-commit-message: $contributorName signed the CLA in $owner/$repo
+          custom-allsigned-prcomment: Everyone in this pull request has signed the CLA. Thank you!
+          lock-pullrequest-aftermerge: true
