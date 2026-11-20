@@ -3,15 +3,36 @@
 #
 #   Tools/make-installer.sh
 #
-# There's no Developer ID yet, so the app is ad-hoc signed and the installer is unsigned. With one:
-# sign the app with "Developer ID Application", pass --sign "Developer ID Installer: …" to
-# productbuild, then notarize the installer (xcrun notarytool submit --wait) and staple it
-# (xcrun stapler staple).
+# By default the app is ad-hoc signed and the installer is unsigned. That's fine on the Mac that built
+# it, but macOS blocks a downloaded copy until the user clicks Open Anyway. To sign for distribution
+# with a Developer ID, set these first (the release workflow does this on GitHub):
+#
+#   DEVELOPER_ID_APPLICATION   the identity that signs the app, "Developer ID Application: Name (TEAMID)"
+#   DEVELOPER_ID_INSTALLER     the identity that signs the installer, "Developer ID Installer: Name (TEAMID)"
+#
+# To also notarize the signed installer with Apple and staple the ticket to it, set either
+#
+#   NOTARY_PROFILE             a profile saved with `xcrun notarytool store-credentials`, or
+#   NOTARY_KEY_PATH, NOTARY_KEY_ID, NOTARY_ISSUER_ID
+#                              an App Store Connect API key: the .p8 file, its key ID and its issuer ID
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 WORK="$PWD/build/Installer"
 OUTPUT="$PWD/build/PuggleSlides.pkg"
+fail() { echo "make-installer: $*" >&2; exit 1; }
+
+NOTARIZE=false
+if [ -n "${NOTARY_PROFILE:-}" ] || [ -n "${NOTARY_KEY_PATH:-}" ]; then
+    NOTARIZE=true
+    [ -n "${DEVELOPER_ID_APPLICATION:-}" ] && [ -n "${DEVELOPER_ID_INSTALLER:-}" ] \
+        || fail "notarizing needs both DEVELOPER_ID_APPLICATION and DEVELOPER_ID_INSTALLER"
+    if [ -z "${NOTARY_PROFILE:-}" ]; then
+        [ -f "$NOTARY_KEY_PATH" ] && [ -n "${NOTARY_KEY_ID:-}" ] && [ -n "${NOTARY_ISSUER_ID:-}" ] \
+            || fail "an API key needs NOTARY_KEY_PATH (an existing .p8 file), NOTARY_KEY_ID and NOTARY_ISSUER_ID"
+    fi
+fi
+
 rm -rf "$WORK" "$OUTPUT"
 mkdir -p "$WORK/root" "$WORK/packages"
 
@@ -27,13 +48,27 @@ fi
 APP="$WORK/PuggleSlides.xcarchive/Products/Applications/PuggleSlides.app"
 codesign --verify --strict "$APP"
 
+# 2. With a Developer ID, sign the app again for distribution: the hardened runtime, a secure timestamp,
+#    and the same entitlements the build gave it. The app has no nested code, so one signature covers it.
+if [ -n "${DEVELOPER_ID_APPLICATION:-}" ]; then
+    echo "Signing PuggleSlides.app with the Developer ID…"
+    codesign -d --entitlements - --xml "$APP" > "$WORK/entitlements.plist" 2>/dev/null || true
+    if [ -s "$WORK/entitlements.plist" ]; then
+        codesign --force --options runtime --timestamp --entitlements "$WORK/entitlements.plist" \
+            --sign "$DEVELOPER_ID_APPLICATION" "$APP"
+    else
+        codesign --force --options runtime --timestamp --sign "$DEVELOPER_ID_APPLICATION" "$APP"
+    fi
+    codesign --verify --strict "$APP"
+fi
+
 info() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Contents/Info.plist"; }
 IDENTIFIER=$(info CFBundleIdentifier)
 VERSION=$(info CFBundleShortVersionString)
 MIN_OS=$(info LSMinimumSystemVersion)
 HOST_ARCHS=$(lipo -archs "$APP/Contents/MacOS/PuggleSlides" | tr ' ' ',')
 
-# 2. The app package. Installers normally update any other copy of an app they find on the disk
+# 3. The app package. Installers normally update any other copy of an app they find on the disk
 #    (in a build folder, say) instead of installing it where they should, so relocation is turned off.
 echo "Packaging…"
 ditto "$APP" "$WORK/root/PuggleSlides.app"
@@ -46,7 +81,7 @@ done
 pkgbuild --quiet --root "$WORK/root" --component-plist "$WORK/components.plist" --install-location /Applications \
     --identifier "$IDENTIFIER" --version "$VERSION" "$WORK/packages/PuggleSlidesApp.pkg"
 
-# 3. The installer: the startup disk only, macOS $MIN_OS or later.
+# 4. The installer: the startup disk only, macOS $MIN_OS or later. Signed when there's a Developer ID.
 cat > "$WORK/Distribution.xml" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
@@ -70,5 +105,42 @@ cat > "$WORK/Distribution.xml" <<EOF
     <pkg-ref id="$IDENTIFIER" version="$VERSION" onConclusion="none">#PuggleSlidesApp.pkg</pkg-ref>
 </installer-gui-script>
 EOF
-productbuild --quiet --distribution "$WORK/Distribution.xml" --package-path "$WORK/packages" "$OUTPUT"
-echo "Built $OUTPUT (PuggleSlides $VERSION, $IDENTIFIER, $HOST_ARCHS)"
+if [ -n "${DEVELOPER_ID_INSTALLER:-}" ]; then
+    echo "Signing the installer with the Developer ID…"
+    productbuild --quiet --distribution "$WORK/Distribution.xml" --package-path "$WORK/packages" \
+        --sign "$DEVELOPER_ID_INSTALLER" --timestamp "$OUTPUT"
+    pkgutil --check-signature "$OUTPUT" > /dev/null
+else
+    productbuild --quiet --distribution "$WORK/Distribution.xml" --package-path "$WORK/packages" "$OUTPUT"
+fi
+
+# 5. Notarization: Apple checks the installer and the app inside it, then the ticket is stapled to the
+#    installer so Gatekeeper accepts it even offline.
+notary() {
+    if [ -n "${NOTARY_PROFILE:-}" ]; then
+        xcrun notarytool "$@" --keychain-profile "$NOTARY_PROFILE"
+    else
+        xcrun notarytool "$@" --key "$NOTARY_KEY_PATH" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID"
+    fi
+}
+if $NOTARIZE; then
+    echo "Notarizing with Apple (usually a few minutes)…"
+    notary submit "$OUTPUT" --wait --timeout 1h --output-format json > "$WORK/notary.json" || true
+    STATUS=$(plutil -extract status raw -o - "$WORK/notary.json" 2>/dev/null || echo "no answer")
+    if [ "$STATUS" != Accepted ]; then
+        SUBMISSION=$(plutil -extract id raw -o - "$WORK/notary.json" 2>/dev/null || true)
+        [ -n "$SUBMISSION" ] && notary log "$SUBMISSION" "$WORK/notary-log.json" > /dev/null 2>&1 && cat "$WORK/notary-log.json"
+        fail "notarization failed ($STATUS). Apple's answer is in $WORK/notary.json"
+    fi
+    xcrun stapler staple -q "$OUTPUT"
+    xcrun stapler validate -q "$OUTPUT"
+    spctl --assess --type install "$OUTPUT" 2>/dev/null || fail "Gatekeeper doesn't accept the notarized installer"
+fi
+
+if $NOTARIZE; then STATE="signed with the Developer ID and notarized"
+elif [ -n "${DEVELOPER_ID_APPLICATION:-}" ] && [ -n "${DEVELOPER_ID_INSTALLER:-}" ]; then STATE="signed with the Developer ID, not notarized"
+elif [ -n "${DEVELOPER_ID_APPLICATION:-}" ]; then STATE="app signed with the Developer ID, installer unsigned, not notarized"
+elif [ -n "${DEVELOPER_ID_INSTALLER:-}" ]; then STATE="app ad-hoc signed, installer signed with the Developer ID, not notarized"
+else STATE="ad-hoc signed, not notarized"
+fi
+echo "Built $OUTPUT (PuggleSlides $VERSION, $IDENTIFIER, $HOST_ARCHS, $STATE)"

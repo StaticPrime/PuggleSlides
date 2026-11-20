@@ -95,7 +95,7 @@ Tools/make-installer.sh
 
 This builds `build/PuggleSlides.pkg`, which installs PuggleSlides.app in /Applications for all users (macOS asks for an administrator's password). The app runs on Apple silicon and Intel Macs with macOS 14 or later.
 
-There's no Developer ID yet, so the installer is unsigned and the app is ad-hoc signed. The installer opens normally on the Mac that built it. A copy that arrives by download, email or AirDrop is blocked the first time: try to open it, then click **Open Anyway** in System Settings ▸ Privacy & Security.
+A local build is ad-hoc signed and the installer is unsigned. That's fine on the Mac that built it, but a copy that arrives by download, email or AirDrop is blocked the first time: the user has to click **Open Anyway** in System Settings ▸ Privacy & Security. To sign with a Developer ID and have Apple notarize the installer, set the variables described at the top of `Tools/make-installer.sh` before running it. Releases built on GitHub are signed and notarized this way when the repository has the Developer ID secrets (see below).
 
 ### Releasing a new version
 
@@ -108,6 +108,16 @@ Tools/release.sh major      # a major update: 1.2.3 → 2.0.0
 ```
 
 The script raises the version and the build number in the Xcode project, commits "Release version 1.2.4", tags it `v1.2.4` and pushes both. The tag starts the Release workflow on GitHub, which runs the package tests, builds the installer with `Tools/make-installer.sh` and publishes it as a GitHub release. The installer keeps the same name in every release, so https://github.com/StaticPrime/PuggleSlides/releases/latest/download/PuggleSlides.pkg always downloads the newest one. `Tools/release.sh --dry-run` shows the next version without changing anything.
+
+To sign and notarize releases, add these secrets under the repository's Settings ▸ Secrets and variables ▸ Actions. Without them, releases are published unsigned, with a warning on the run.
+
+| Secret | What it holds |
+| --- | --- |
+| `DEVELOPER_ID_P12_BASE64` | A .p12 file with the "Developer ID Application" and "Developer ID Installer" certificates and their private keys, base64-encoded (`base64 -i DeveloperID.p12 \| pbcopy`) |
+| `DEVELOPER_ID_P12_PASSWORD` | The .p12 file's password |
+| `NOTARY_API_KEY` | The text of an App Store Connect API key file (`AuthKey_….p8`), used to notarize |
+| `NOTARY_KEY_ID` | That key's ID |
+| `NOTARY_ISSUER_ID` | The issuer ID shown above the keys in App Store Connect |
 
 ## Tests
 
