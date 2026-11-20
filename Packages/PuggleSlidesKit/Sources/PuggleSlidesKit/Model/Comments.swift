@@ -4,14 +4,18 @@ import Foundation
 public struct Comment: Hashable, Codable, Sendable, Identifiable {
     public var id: UUID
     public var author: String
+    /// In a shared presentation, who wrote it: their iCloud identity. Nil for comments written before it was shared,
+    /// and in files.
+    public var authorID: String?
     public var date: Date
     public var text: String
     /// When the text was last changed, if it was.
     public var editedDate: Date?
 
-    public init(id: UUID = UUID(), author: String, date: Date = Date(), text: String, editedDate: Date? = nil) {
+    public init(id: UUID = UUID(), author: String, authorID: String? = nil, date: Date = Date(), text: String, editedDate: Date? = nil) {
         self.id = id
         self.author = author
+        self.authorID = authorID
         self.date = date
         self.text = text
         self.editedDate = editedDate

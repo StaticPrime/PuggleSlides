@@ -571,8 +571,8 @@ extension DocumentWindowController: SlideCommands, NSMenuItemValidation {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let url = panel.url, let self, let data = try? Data(contentsOf: url),
-                  let type = MediaItem.contentType(sniffing: data) else { return }
+            guard response == .OK, let url = panel.url, let self, let file = try? Data(contentsOf: url),
+                  let (data, type) = MediaItem.storable(file) else { return }
             let ids = self.controller.selectedSlideIDs
             self.controller.perform("Change Background") { presentation in
                 let id = presentation.addMedia(data, contentType: type)
@@ -642,6 +642,7 @@ extension DocumentWindowController: SlideCommands, NSMenuItemValidation {
     // MARK: Validation
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if let result = validateCollaboration(menuItem) { return result }
         if let result = validatePhase3(menuItem) { return result }
         if let result = validateComments(menuItem) { return result }
         if let result = validateFind(menuItem) { return result }

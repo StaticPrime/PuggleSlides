@@ -9,6 +9,32 @@ extension PresentationController {
         return name.isEmpty ? "Me" : name
     }
 
+    /// In a shared presentation, who's commenting: their iCloud identity.
+    var commentAuthorID: String? { collaboration?.me?.id }
+
+    /// In a shared presentation people change only what they wrote (the owner, what was written before it was shared).
+    func mayEditComment(_ comment: Comment) -> Bool {
+        guard state.canComment else { return false }
+        return collaboration?.isLive == true ? collaboration!.mayEdit(authorID: comment.authorID) : true
+    }
+
+    /// And delete what they wrote, or anything if they can edit the presentation.
+    func mayDeleteComment(_ comment: Comment) -> Bool {
+        guard state.canComment else { return false }
+        return collaboration?.isLive == true ? collaboration!.mayDelete(authorID: comment.authorID) : true
+    }
+
+    /// Whether comments can only be read just now: a shared presentation that can't save to iCloud (or is opening).
+    var commentsAreReadOnly: Bool { !state.canComment }
+
+    /// Comments don't change while a shared presentation can't save to iCloud: nothing is kept to send later. Says so.
+    private func refusesComments() -> Bool {
+        guard !state.canComment else { return false }
+        NSSound.beep()
+        collaboration?.explainOffline()
+        return true
+    }
+
     /// The open threads on a slide, oldest first.
     func openThreads(onSlide slideID: UUID?) -> [CommentThread] {
         guard let id = slideID, let index = presentation.slideIndex(id: id) else { return [] }
@@ -27,7 +53,7 @@ extension PresentationController {
     @discardableResult
     func addComment(_ text: String, about elementID: UUID?, onSlide slideID: UUID) -> UUID? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let index = presentation.slideIndex(id: slideID) else { return nil }
+        guard !trimmed.isEmpty, !refusesComments(), let index = presentation.slideIndex(id: slideID) else { return nil }
         let slide = presentation.slides[index]
         let element = elementID.flatMap(slide.element(id:))
         var position = SlidePoint(x: 8, y: 8)
@@ -35,7 +61,8 @@ extension PresentationController {
             let frame = presentation.placement(of: element, on: slide).frame
             position = SlidePoint(x: frame.x + frame.width, y: frame.y)
         }
-        let thread = CommentThread(comments: [Comment(author: commentAuthor, text: trimmed)], elementID: element?.id, position: position)
+        let thread = CommentThread(comments: [Comment(author: commentAuthor, authorID: commentAuthorID, text: trimmed)], elementID: element?.id,
+                                   position: position)
         perform("Add Comment", update: .comments, showing: slideID) { $0.slides[index].comments.append(thread) }
         return thread.id
     }
@@ -43,7 +70,8 @@ extension PresentationController {
     func replyToComment(_ threadID: UUID, text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        editThread(threadID, actionName: "Reply") { $0.comments.append(Comment(author: commentAuthor, text: trimmed)) }
+        let author = commentAuthor, authorID = commentAuthorID
+        editThread(threadID, actionName: "Reply") { $0.comments.append(Comment(author: author, authorID: authorID, text: trimmed)) }
     }
 
     func editComment(_ commentID: UUID, inThread threadID: UUID, text: String) {
@@ -58,7 +86,7 @@ extension PresentationController {
 
     /// Deleting the first comment deletes the whole thread.
     func deleteComment(_ commentID: UUID, inThread threadID: UUID) {
-        guard let location = presentation.commentLocation(of: threadID) else { return }
+        guard !refusesComments(), let location = presentation.commentLocation(of: threadID) else { return }
         let thread = presentation.slides[location.slide].comments[location.thread]
         if thread.comments.first?.id == commentID {
             perform("Delete Comment", update: .comments) { $0.slides[location.slide].comments.remove(at: location.thread) }
@@ -72,7 +100,7 @@ extension PresentationController {
     }
 
     private func editThread(_ threadID: UUID, actionName: String, _ edit: (inout CommentThread) -> Void) {
-        guard let location = presentation.commentLocation(of: threadID) else { return }
+        guard !refusesComments(), let location = presentation.commentLocation(of: threadID) else { return }
         perform(actionName, update: .comments) { edit(&$0.slides[location.slide].comments[location.thread]) }
     }
 }

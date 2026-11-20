@@ -111,6 +111,9 @@ import PuggleSlidesKit
     func ppToggleSpellCheck(_ sender: Any?)
     func ppPreferences(_ sender: Any?)
     func ppShowShortcuts(_ sender: Any?)
+    // Sharing through iCloud.
+    func ppCollaborate(_ sender: Any?)
+    func ppLeaveShared(_ sender: Any?)
 }
 
 /// The responder chain's undo and redo actions (handled by windows and text views), named for `#selector`.
@@ -255,6 +258,13 @@ enum MenuBuilder {
         DownloadFormat.allCases.map { format in item(format.title, #selector(SlideCommands.ppDownload(_:)), tag: format.rawValue) }
     }
 
+    /// File ▸ Shared presentations: those shared with this person, and theirs that are shared, filled in as it opens.
+    private static func sharedPresentationsMenu() -> NSMenuItem {
+        let item = submenu("Shared presentations", symbol: "person.2.circle", [])
+        item.submenu?.delegate = SharedPresentationsMenu.shared
+        return item
+    }
+
     private static func fileItems() -> [NSMenuItem] {
         [
             item("New presentation", #selector(NSDocumentController.newDocument(_:)), "n", symbol: "plus.square"),
@@ -262,6 +272,10 @@ enum MenuBuilder {
             item("Import slides…", #selector(SlideCommands.ppImportSlides(_:)), symbol: "square.and.arrow.down.on.square"),
             .separator(),
             item("Make a copy", #selector(NSDocument.duplicate(_:)), "s", [.command, .shift], symbol: "plus.square.on.square"),
+            .separator(),
+            item("Collaborate…", #selector(SlideCommands.ppCollaborate(_:)), "c", [.command, .option], symbol: "person.2"),
+            item("Leave shared presentation…", #selector(SlideCommands.ppLeaveShared(_:)), symbol: "rectangle.portrait.and.arrow.right"),
+            sharedPresentationsMenu(),
             .separator(),
             item("Save", #selector(NSDocument.save(_:)), "s", symbol: "square.and.arrow.down"),
             submenu("Download", symbol: "arrow.down.to.line", downloadItems()),
@@ -671,6 +685,75 @@ final class LayoutMenuDelegate: NSObject, NSMenuDelegate {
         guard let window = NSApp.keyWindow?.windowController as? DocumentWindowController else { return }
         for layoutItem in window.layoutMenuItems(action: #selector(SlideCommands.ppApplyLayout(_:)), checkCurrent: true) {
             submenu.addItem(layoutItem)
+        }
+    }
+}
+
+/// Fills File ▸ Shared presentations each time it opens.
+final class SharedPresentationsMenu: NSObject, NSMenuDelegate {
+    static let shared = SharedPresentationsMenu()
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let controller = CollaborationController.shared else { return }
+        let others = controller.sharedWithMe
+        let mine = controller.mine
+        if case let .unavailable(reason) = controller.status {
+            let item = NSMenuItem(title: reason, action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+        if !others.isEmpty {
+            menu.addItem(sectionHeader("Shared with you"))
+            for entry in others {
+                let item = NSMenuItem(title: entry.title, action: #selector(open(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = entry.id.uuidString
+                item.toolTip = entry.ownerName.isEmpty ? nil : "Shared by \(entry.ownerName)"
+                item.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: nil)
+                menu.addItem(item)
+            }
+        }
+        if !mine.isEmpty {
+            if !others.isEmpty { menu.addItem(.separator()) }
+            menu.addItem(sectionHeader("Shared by you"))
+            for (id, title) in mine {
+                let item = NSMenuItem(title: title, action: #selector(open(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = id.uuidString
+                item.image = NSImage(systemSymbolName: "person.2", accessibilityDescription: nil)
+                menu.addItem(item)
+            }
+        }
+        if others.isEmpty, mine.isEmpty {
+            let item = NSMenuItem(title: "No shared presentations", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let link = NSMenuItem(title: "Open Invitation Link…", action: #selector(openLink(_:)), keyEquivalent: "")
+        link.target = self
+        link.image = NSImage(systemSymbolName: "link", accessibilityDescription: nil)
+        menu.addItem(link)
+    }
+
+    @objc private func openLink(_ sender: Any?) {
+        CollaborationController.shared?.askForInvitationLink()
+    }
+
+    private func sectionHeader(_ title: String) -> NSMenuItem {
+        if #available(macOS 14, *) { return NSMenuItem.sectionHeader(title: title) }
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    @objc private func open(_ sender: NSMenuItem) {
+        guard let controller = CollaborationController.shared, let id = (sender.representedObject as? String).flatMap(UUID.init(uuidString:)) else { return }
+        if let entry = controller.sharedWithMe.first(where: { $0.id == id }) {
+            controller.openShared(entry)
+        } else if let me = controller.status.me {
+            controller.openShared(SharedDocumentEntry(id: id, title: sender.title, ownerName: me.name, ownerID: me.id))
         }
     }
 }

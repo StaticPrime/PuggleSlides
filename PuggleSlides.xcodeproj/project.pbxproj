@@ -12,6 +12,8 @@
 
 /* Begin PBXFileReference section */
 		7C0000000000000000000004 /* PuggleSlides.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PuggleSlides.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7C0000000000000000000015 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		7C0000000000000000000016 /* iCloud.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iCloud.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -52,8 +54,18 @@
 			isa = PBXGroup;
 			children = (
 				7C0000000000000000000005 /* PuggleSlides */,
+				7C0000000000000000000014 /* Config */,
 				7C0000000000000000000003 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		7C0000000000000000000014 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				7C0000000000000000000015 /* Debug.xcconfig */,
+				7C0000000000000000000016 /* iCloud.entitlements */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		7C0000000000000000000003 /* Products */ = {
@@ -196,11 +208,9 @@
 		};
 		7C000000000000000000000F /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 7C0000000000000000000015 /* Debug.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = PuggleSlides/PuggleSlides.entitlements;
-				CODE_SIGN_IDENTITY = "-";
-				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 2;
 				ENABLE_HARDENED_RUNTIME = YES;

@@ -5,6 +5,11 @@ import PuggleSlidesKit
 extension DocumentWindowController: CommentActions {
     func ppInsertComment(_ sender: Any?) {
         guard let slideID = controller.currentSlideID, controller.builder == nil else { return }
+        guard state.canComment else {
+            NSSound.beep()
+            presentationDocument?.collaboration?.explainOffline()
+            return
+        }
         finishEditing()
         if isGridView { ppToggleGridView(nil) }
         if !state.showsComments { setShowsComments(true) }

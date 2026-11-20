@@ -52,8 +52,8 @@ extension PresentationController {
 
     /// Replace image: a new picture in the same place and size, keeping the mask, border and adjustments.
     /// The crop is cleared, since it belonged to the old picture.
-    func replaceSelectedImage(with data: Data) -> Bool {
-        guard let id = selectedPicture?.id, let contentType = MediaItem.contentType(sniffing: data), NSImage(data: data) != nil,
+    func replaceSelectedImage(with original: Data) -> Bool {
+        guard let id = selectedPicture?.id, let (data, contentType) = MediaItem.storable(original), NSImage(data: data) != nil,
               let slideIndex = currentSlideIndex else { return false }
         perform("Replace Image") { presentation in
             let mediaID = presentation.addMedia(data, contentType: contentType)

@@ -48,6 +48,9 @@ protocol ChromeActions: AnyObject {
     func renameThemeBuilderPage()
     func showThemeColors()
     func closeThemeBuilder()
+    // Sharing.
+    func showCollaborate()
+    func startComment()
 }
 
 /// What a color picker colors.
@@ -141,7 +144,8 @@ struct HeaderView: View {
                 .hoverBackground()
                 .focused($titleFocused)
                 .onSubmit { commitTitle() }
-                .help("Rename")
+                .disabled(!state.collaboration.isOwner && state.collaboration.isShared)
+                .help(state.collaboration.isShared && !state.collaboration.isOwner ? "Only its owner can rename it" : "Rename")
             if let badge = state.formatBadge {
                 Text(badge)
                     .font(.system(size: 10.5, weight: .semibold))
@@ -151,15 +155,41 @@ struct HeaderView: View {
                     .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.secondaryText.opacity(0.5), lineWidth: 1))
                     .help("This file is stored in \(badge.dropFirst()) format")
             }
-            Image(systemName: state.saveStatus.symbol)
+            Image(systemName: statusSymbol)
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.secondaryText)
-                .help(state.saveStatus.text)
+                .help(statusText)
             Spacer(minLength: 12)
-            Text(state.saveStatus.text)
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.secondaryText)
-                .lineLimit(1)
+            // As the window narrows, the status words go first, then the buttons' words.
+            ViewThatFits(in: .horizontal) {
+                trailingControls(showsStatus: true, compact: false)
+                trailingControls(showsStatus: false, compact: false)
+                trailingControls(showsStatus: false, compact: true)
+            }
+        }
+        .frame(height: TitlebarMetrics.rowHeight)
+        .padding(.leading, state.titlebarLeading)
+        .padding(.trailing, 14)
+        .padding(.top, max(0, state.titlebarCenterY - TitlebarMetrics.rowHeight / 2))
+        .padding(.bottom, 8)
+        .background(WindowDragArea())
+        .onAppear { titleText = state.title }
+        .onChange(of: state.title) { _, newValue in if !titleFocused { titleText = newValue } }
+        .onChange(of: titleFocused) { _, focused in if !focused { commitTitle() } }
+        .onChange(of: state.renameRequest) { _, _ in titleFocused = true }
+        .onExitCommand { titleText = state.title; titleFocused = false; actions.focusCanvas() }
+    }
+
+    private func trailingControls(showsStatus: Bool, compact: Bool) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            if showsStatus {
+                Text(statusText)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            CollaboratorAvatars(state: state.collaboration)
             ToolbarIconButton(symbol: "clock.arrow.circlepath", help: "Open version history") { actions.showVersionHistory() }
             ToolbarIconButton(symbol: "text.bubble", help: "Show all comments (⌥⇧⌘A)", isOn: state.sidebar == .comments) {
                 actions.toggleCommentsPanel()
@@ -168,13 +198,19 @@ struct HeaderView: View {
                 Button {
                     actions.startSlideshow(fromBeginning: false)
                 } label: {
-                    Label("Slideshow", systemImage: "play.rectangle")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.primaryText)
-                        .padding(.leading, 12)
-                        .padding(.trailing, 8)
-                        .frame(height: 30)
-                        .contentShape(Rectangle())
+                    Group {
+                        if compact {
+                            Image(systemName: "play.rectangle")
+                        } else {
+                            Label("Slideshow", systemImage: "play.rectangle")
+                        }
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.primaryText)
+                    .padding(.leading, compact ? 10 : 12)
+                    .padding(.trailing, 8)
+                    .frame(height: 30)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help("Start slideshow (⌘↩)")
@@ -194,27 +230,55 @@ struct HeaderView: View {
             }
             .overlay(Capsule().strokeBorder(Theme.divider, lineWidth: 1))
             .clipShape(Capsule())
+            .fixedSize()
+            if state.showsCollaborateButton { collaborateButton(compact: compact) }
             ToolbarDropdown(help: "Download a copy", showsChevron: false, open: { actions.popUp(.download, from: $0) }) {
-                Label("Download", systemImage: "arrow.down.to.line")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(red: 0.0, green: 0.12, blue: 0.27))
-                    .padding(.horizontal, 10)
-                    .frame(height: 30)
-                    .background(Capsule().fill(Color(red: 0.76, green: 0.87, blue: 1.0)))
+                Group {
+                    if compact {
+                        Image(systemName: "arrow.down.to.line")
+                    } else {
+                        Label("Download", systemImage: "arrow.down.to.line")
+                    }
+                }
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color(red: 0.0, green: 0.12, blue: 0.27))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .background(Capsule().fill(Color(red: 0.76, green: 0.87, blue: 1.0)))
+                .fixedSize()
             }
         }
-        .frame(height: TitlebarMetrics.rowHeight)
-        .padding(.leading, state.titlebarLeading)
-        .padding(.trailing, 14)
-        .padding(.top, max(0, state.titlebarCenterY - TitlebarMetrics.rowHeight / 2))
-        .padding(.bottom, 8)
-        .background(WindowDragArea())
-        .onAppear { titleText = state.title }
-        .onChange(of: state.title) { _, newValue in if !titleFocused { titleText = newValue } }
-        .onChange(of: titleFocused) { _, focused in if !focused { commitTitle() } }
-        .onChange(of: state.renameRequest) { _, _ in titleFocused = true }
-        .onExitCommand { titleText = state.title; titleFocused = false; actions.focusCanvas() }
     }
+
+    private var collaborateSymbol: String { state.collaboration.isShared ? "person.2.fill" : "person.badge.plus" }
+
+    /// The Collaborate button, for presentations of this person's: those shared with them don't have it.
+    private func collaborateButton(compact: Bool) -> some View {
+        Button { actions.showCollaborate() } label: {
+            Group {
+                if compact {
+                    Image(systemName: collaborateSymbol)
+                } else {
+                    Label("Collaborate", systemImage: collaborateSymbol)
+                }
+            }
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, compact ? 10 : 12)
+            .frame(height: 30)
+            .background(Capsule().fill(Theme.accent))
+            .contentShape(Capsule())
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(state.collaboration.isShared ? "See and change who this presentation is shared with" : "Share this presentation with people to work on it together")
+        .accessibilityLabel("Collaborate")
+    }
+
+    /// While shared, how its iCloud copy is keeping up; otherwise how its file is.
+    private var statusText: String { state.collaboration.isShared ? state.collaboration.statusText : state.saveStatus.text }
+    private var statusSymbol: String { state.collaboration.isShared ? state.collaboration.statusSymbol : state.saveStatus.symbol }
 
     private func commitTitle() {
         let trimmed = titleText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -242,9 +306,13 @@ struct FormattingToolbar: View {
     private enum Group: Hashable {
         case newSlide, history, zoom, tools, slide, shape, line, font, textStyle, paragraph, formatOptions
         case tableBorders, chart, imageTools, wordArtStyle, media
+        /// In place of the editing groups, while the presentation can only be commented on.
+        case commenting
     }
 
     private var groups: [Group] {
+        // Someone a presentation is shared with to comment on gets zoom and commenting, and nothing that edits.
+        if state.access != .full { return [.zoom, .commenting] }
         var result: [Group] = [.newSlide, .history, .zoom, .tools]
         switch state.selectionKind {
         case .none: result.append(.slide)
@@ -330,6 +398,21 @@ struct FormattingToolbar: View {
             TextToolbarButton(text: "Edit chart", help: "Edit the chart's type, numbers and labels") { actions.editChart() }
         case .media:
             ToolbarIconButton(symbol: "play.fill", help: "Play") { actions.playClip() }
+        case .commenting:
+            HStack(spacing: 6) {
+                Image(systemName: modeSymbol)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.secondaryText)
+                Text(modeTitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.primaryText)
+                    .padding(.trailing, 4)
+                if state.access == .commentOnly {
+                    TextToolbarButton(text: "Add comment", help: "Add a comment (⌥⌘M)") { actions.startComment() }
+                }
+            }
+            .padding(.horizontal, 6)
+            .help(modeHelp)
         case .imageTools:
             HStack(spacing: 1) {
                 ToolbarIconButton(symbol: "crop", help: "Crop image") { actions.cropImage() }
@@ -351,6 +434,31 @@ struct FormattingToolbar: View {
                 TextToolbarButton(text: "Format options", help: "Format options") { actions.showSidebar(.formatOptions) }
                 TextToolbarButton(text: "Animate", help: "Animate") { actions.animateSelection() }
             }
+        }
+    }
+
+    /// What the toolbar says in place of its editing tools, when the presentation can't be changed here.
+    private var modeTitle: String {
+        switch state.access {
+        case .offline: "Offline"
+        case .locked: "Opening"
+        default: "Commenting"
+        }
+    }
+
+    private var modeSymbol: String {
+        switch state.access {
+        case .offline: "icloud.slash"
+        case .locked: "icloud.and.arrow.down"
+        default: "text.bubble"
+        }
+    }
+
+    private var modeHelp: String {
+        switch state.access {
+        case .offline: "iCloud can’t be reached, so this presentation can’t be changed until it can"
+        case .locked: "The shared copy is opening from iCloud"
+        default: "You can comment on this presentation, but not change it"
         }
     }
 

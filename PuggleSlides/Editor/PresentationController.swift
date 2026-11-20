@@ -42,6 +42,8 @@ final class PresentationController {
     var tableBorderPosition = TableBorderPosition.all
     /// While the theme builder is open: the theme's pages being edited, and how to put them back.
     private(set) var builder: ThemeBuilderSession?
+    /// While the presentation is shared: its part in that, which takes in edits as they're recorded and keeps undo.
+    weak var collaboration: PresentationCollaboration?
 
     private struct Snapshot {
         var presentation: Presentation
@@ -62,6 +64,15 @@ final class PresentationController {
 
     var presentation: Presentation { builder?.proxy ?? document?.presentation ?? lastPresentation }
     var undoManager: UndoManager? { builder?.undoManager ?? document?.undoManager }
+    /// The presentation itself, never the theme builder's pages.
+    var realPresentation: Presentation { document?.presentation ?? lastPresentation }
+
+    /// Whether the slides may be changed here: not while a shared presentation is only to be commented on (or is still
+    /// opening).
+    var canEditContent: Bool { state.access == .full }
+
+    /// Whether edits go to a shared presentation's session, as changes and undo steps of their own.
+    private var sharedSession: PresentationCollaboration? { collaboration?.isLive == true ? collaboration : nil }
 
     /// Puts an edited presentation in the document. In the theme builder the edit is to the theme's pages, which are
     /// mapped back into the real theme as they change.
@@ -74,10 +85,63 @@ final class PresentationController {
             let real = session.real(from: proxy)
             lastPresentation = real
             document?.presentation = real
+            collaboration?.noteLocalChange()
             return
         }
         lastPresentation = presentation
         document?.presentation = presentation
+        collaboration?.noteLocalChange()
+    }
+
+    // MARK: Shared presentations
+
+    /// Shows the presentation as other people changed it (or as a shared presentation's parts say it is): no undo, and
+    /// the selection kept wherever it still can be. With the theme builder open, the builder carries on over it.
+    func applyShared(_ shared: Presentation, update: PresentationUpdate) {
+        let before = (currentSlideID, selectedSlideIDs, selectedElementIDs)
+        if var session = builder {
+            session.base = shared
+            builder = session
+            let real = session.real(from: session.proxy)
+            lastPresentation = real
+            document?.presentation = real
+        } else {
+            lastPresentation = shared
+            document?.presentation = shared
+        }
+        if update.contains(.theme) { themeRevision += 1 }
+        repairSelection()
+        var update = update
+        if (currentSlideID, selectedSlideIDs, selectedElementIDs) != before { update.insert(.selection) }
+        notify(update)
+    }
+
+    /// Replaces the whole presentation, as Revert would: a shared presentation's copy from iCloud.
+    func replacePresentation(_ shared: Presentation) {
+        lastPresentation = shared
+        document?.presentation = shared
+        reloadFromDocument()
+    }
+
+    /// Undo in a shared presentation brings back what was selected, where it still exists.
+    func restoreSharedSelection(slideID: UUID?, elements: [UUID]) {
+        if let slideID, presentation.slideIndex(id: slideID) != nil {
+            currentSlideID = slideID
+            selectedSlideIDs = [slideID]
+        }
+        repairSelection()
+        selectedElementIDs = elements.filter { currentSlide?.element(id: $0) != nil }
+        notify(.selection)
+    }
+
+    /// `edited` with only its comments taken, onto `original`: what someone who may only comment can change.
+    private static func keepingComments(of edited: Presentation, in original: Presentation) -> Presentation {
+        var result = original
+        let threads = Dictionary(edited.slides.map { ($0.id, $0.comments) }, uniquingKeysWith: { first, _ in first })
+        for index in result.slides.indices {
+            if let comments = threads[result.slides[index].id] { result.slides[index].comments = comments }
+        }
+        return result
     }
 
     func startThemeBuilder(_ session: ThemeBuilderSession, showing pageID: UUID) {
@@ -195,6 +259,13 @@ final class PresentationController {
         let before = snapshot
         var presentation = self.presentation
         edit(&presentation)
+        switch state.access {
+        case .full: break
+        // Someone who may only comment changes comments, and nothing else.
+        case .commentOnly: presentation = Self.keepingComments(of: presentation, in: before.presentation)
+        // A shared presentation that's opening, or can't save to iCloud, doesn't change at all.
+        case .locked, .offline: presentation = before.presentation
+        }
         // Animations go with their elements.
         for index in presentation.slides.indices {
             let slide = presentation.slides[index]
@@ -220,6 +291,12 @@ final class PresentationController {
     }
 
     private func record(before: Snapshot, after: Snapshot, actionName: String, update: PresentationUpdate) {
+        // In a shared presentation the session makes the undo step: one that takes back only this Mac's changes. (The
+        // theme builder keeps its own undo for its pages; leaving it makes the shared step.)
+        if builder == nil, let session = sharedSession {
+            session.recorded(actionName: actionName, selection: SharedSelection(slideID: before.slideID, elements: before.elements))
+            return
+        }
         undoManager?.registerUndo(withTarget: self) { controller in
             controller.restore(before, other: after, actionName: actionName, update: update)
         }
@@ -268,7 +345,7 @@ final class PresentationController {
     var isInteractive: Bool { interactiveStart != nil }
 
     func updateInteractive(_ update: PresentationUpdate = .content, _ edit: (inout Presentation) -> Void) {
-        guard interactiveStart != nil else { return }
+        guard interactiveStart != nil, canEditContent else { return }
         // Edit a copy: the edit may read the controller (and so the document) while it runs.
         var presentation = self.presentation
         edit(&presentation)
@@ -279,6 +356,11 @@ final class PresentationController {
     func endInteractive(actionName: String, update: PresentationUpdate = .content) {
         guard let start = interactiveStart else { return }
         interactiveStart = nil
+        if builder == nil, let session = sharedSession {
+            session.recorded(actionName: actionName, selection: SharedSelection(slideID: start.slideID, elements: start.elements))
+            notify(update)
+            return
+        }
         guard start.presentation != presentation else { return }
         record(before: start, after: snapshot, actionName: actionName, update: update)
         notify(update)
@@ -287,6 +369,12 @@ final class PresentationController {
     func cancelInteractive() {
         guard let start = interactiveStart else { return }
         interactiveStart = nil
+        // Shared: other people's changes made meanwhile stay; only this edit goes.
+        if builder == nil, let session = sharedSession {
+            session.cancelGroup()
+            notify(.content)
+            return
+        }
         store(start.presentation)
         notify(.content)
     }

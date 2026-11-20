@@ -47,6 +47,8 @@ final class SpeakerNotesView: NSScrollView, NSTextViewDelegate {
     /// The slide whose notes are showing.
     private(set) var slideID: UUID?
     private var shownNotes = TextBody()
+    /// In a shared presentation: commits the notes being typed a moment after each pause, so others see them.
+    private var liveCommit: DispatchWorkItem?
     private static let font = "Arial"
     private static let size: CGFloat = 14
 
@@ -98,7 +100,8 @@ final class SpeakerNotesView: NSScrollView, NSTextViewDelegate {
             textView.isEditable = false
             return
         }
-        textView.isEditable = true
+        // People a shared presentation is shared with to comment on can read the notes, not change them.
+        textView.isEditable = controller.canEditContent
         if slide.id == slideID, slide.notes == shownNotes { return }
         if slide.id == slideID, window?.firstResponder === textView { return }
         slideID = slide.id
@@ -151,8 +154,17 @@ final class SpeakerNotesView: NSScrollView, NSTextViewDelegate {
     }
 
     /// Saves typed notes into the presentation, unless they still say what the slide had.
+    func textDidChange(_ notification: Notification) {
+        guard controller.collaboration?.isLive == true else { return }
+        liveCommit?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.commit() }
+        liveCommit = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
     func commit() {
-        guard let slideID else { return }
+        liveCommit?.cancel()
+        guard let slideID, controller.canEditContent else { return }
         let notes = currentNotes()
         guard notes.plainText != shownNotes.plainText || Self.signature(notes) != Self.signature(shownNotes) else { return }
         shownNotes = notes

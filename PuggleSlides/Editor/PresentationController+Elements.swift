@@ -70,8 +70,9 @@ extension PresentationController {
     }
 
     /// Insert ▸ Image: placed in the middle of the slide at its own size, or smaller to fit.
-    func insertImage(data: Data, at center: SlidePoint? = nil) -> Bool {
-        guard let contentType = MediaItem.contentType(sniffing: data), contentType.hasPrefix("image/"), let image = NSImage(data: data),
+    func insertImage(data original: Data, at center: SlidePoint? = nil) -> Bool {
+        // TIFF and BMP pictures are kept as PNG, many times smaller.
+        guard let (data, contentType) = MediaItem.storable(original), contentType.hasPrefix("image/"), let image = NSImage(data: data),
               image.size.width > 0 else { return false }
         let size = presentation.slideSize
         var width = Double(image.size.width), height = Double(image.size.height)

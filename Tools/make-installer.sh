@@ -10,6 +10,13 @@
 #   DEVELOPER_ID_APPLICATION   the identity that signs the app, "Developer ID Application: Name (TEAMID)"
 #   DEVELOPER_ID_INSTALLER     the identity that signs the installer, "Developer ID Installer: Name (TEAMID)"
 #
+# To sign the app for iCloud too, which sharing presentations goes through, also set
+#
+#   DEVELOPER_ID_PROFILE       a Developer ID provisioning profile for com.pugglesoft.PuggleSlides with iCloud
+#                              (CloudKit, container iCloud.com.pugglesoft.PuggleSlides) and Push Notifications
+#
+# Without it, the app can’t share presentations: it says so in the Collaborate sheet.
+#
 # To also notarize the signed installer with Apple and staple the ticket to it, set either
 #
 #   NOTARY_PROFILE             a profile saved with `xcrun notarytool store-credentials`, or
@@ -33,6 +40,10 @@ if [ -n "${NOTARY_PROFILE:-}" ] || [ -n "${NOTARY_KEY_PATH:-}" ]; then
     fi
 fi
 
+if [ -n "${DEVELOPER_ID_PROFILE:-}" ] && [ -z "${DEVELOPER_ID_APPLICATION:-}" ]; then
+    fail "DEVELOPER_ID_PROFILE needs DEVELOPER_ID_APPLICATION, to sign the app with"
+fi
+
 rm -rf "$WORK" "$OUTPUT"
 mkdir -p "$WORK/root" "$WORK/packages"
 
@@ -48,11 +59,69 @@ fi
 APP="$WORK/PuggleSlides.xcarchive/Products/Applications/PuggleSlides.app"
 codesign --verify --strict "$APP"
 
+info() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Contents/Info.plist"; }
+IDENTIFIER=$(info CFBundleIdentifier)
+VERSION=$(info CFBundleShortVersionString)
+MIN_OS=$(info LSMinimumSystemVersion)
+HOST_ARCHS=$(lipo -archs "$APP/Contents/MacOS/PuggleSlides" | tr ' ' ',')
+
+# The iCloud container shared presentations are kept in. With a provisioning profile that allows it, the profile goes
+# inside the app and the entitlements for iCloud (and, if it allows them, pushes) join the build's own.
+CONTAINER=iCloud.com.pugglesoft.PuggleSlides
+add_icloud_entitlements() {
+    [ -f "$DEVELOPER_ID_PROFILE" ] || fail "DEVELOPER_ID_PROFILE ($DEVELOPER_ID_PROFILE) isn't a file"
+    security cms -D -i "$DEVELOPER_ID_PROFILE" > "$WORK/profile.plist" 2>/dev/null \
+        || fail "DEVELOPER_ID_PROFILE can't be read as a provisioning profile"
+    profile() { /usr/libexec/PlistBuddy -c "Print :$1" "$WORK/profile.plist" 2>/dev/null; }
+    local team app_id containers environments pushes
+    team=$(profile TeamIdentifier:0) || fail "the provisioning profile names no team"
+    app_id=$(profile Entitlements:com.apple.application-identifier) || app_id=""
+    [ "$app_id" = "$team.$IDENTIFIER" ] || fail "the provisioning profile is for ${app_id:-no app}, not $team.$IDENTIFIER"
+    containers=$(profile Entitlements:com.apple.developer.icloud-container-identifiers) || containers=""
+    case "$containers" in
+        *"$CONTAINER"*) ;;
+        *) fail "the provisioning profile doesn't allow the iCloud container $CONTAINER" ;;
+    esac
+    if [ ! -s "$WORK/entitlements.plist" ]; then
+        printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+            '<plist version="1.0"><dict/></plist>' > "$WORK/entitlements.plist"
+    fi
+    entitle() { /usr/libexec/PlistBuddy -c "$1" "$WORK/entitlements.plist" > /dev/null; }
+    for key in com.apple.application-identifier com.apple.developer.team-identifier com.apple.developer.icloud-container-identifiers \
+               com.apple.developer.icloud-services com.apple.developer.icloud-container-environment com.apple.developer.aps-environment; do
+        entitle "Delete :$key" 2> /dev/null || true
+    done
+    entitle "Add :com.apple.application-identifier string $team.$IDENTIFIER"
+    entitle "Add :com.apple.developer.team-identifier string $team"
+    entitle "Add :com.apple.developer.icloud-container-identifiers array"
+    entitle "Add :com.apple.developer.icloud-container-identifiers:0 string $CONTAINER"
+    entitle "Add :com.apple.developer.icloud-services array"
+    entitle "Add :com.apple.developer.icloud-services:0 string CloudKit"
+    environments=$(profile Entitlements:com.apple.developer.icloud-container-environment) || environments=""
+    case "$environments" in
+        *Production*) entitle "Add :com.apple.developer.icloud-container-environment string Production" ;;
+    esac
+    if pushes=$(profile Entitlements:com.apple.developer.aps-environment); then
+        entitle "Add :com.apple.developer.aps-environment string $pushes"
+    else
+        echo "make-installer: the provisioning profile doesn't allow pushes, so shared presentations are only checked for changes while they are open and when PuggleSlides comes to the front, and collaborators get no notifications" >&2
+    fi
+    cp "$DEVELOPER_ID_PROFILE" "$APP/Contents/embedded.provisionprofile"
+    ICLOUD=", for iCloud"
+}
+ICLOUD=""
+
 # 2. With a Developer ID, sign the app again for distribution: the hardened runtime, a secure timestamp,
-#    and the same entitlements the build gave it. The app has no nested code, so one signature covers it.
+#    and the same entitlements the build gave it (with iCloud's, given a profile). The app has no nested
+#    code, so one signature covers it.
 if [ -n "${DEVELOPER_ID_APPLICATION:-}" ]; then
     echo "Signing PuggleSlides.app with the Developer ID…"
     codesign -d --entitlements - --xml "$APP" > "$WORK/entitlements.plist" 2>/dev/null || true
+    if [ -n "${DEVELOPER_ID_PROFILE:-}" ]; then
+        echo "Signing it for iCloud, with the provisioning profile…"
+        add_icloud_entitlements
+    fi
     if [ -s "$WORK/entitlements.plist" ]; then
         codesign --force --options runtime --timestamp --entitlements "$WORK/entitlements.plist" \
             --sign "$DEVELOPER_ID_APPLICATION" "$APP"
@@ -61,12 +130,6 @@ if [ -n "${DEVELOPER_ID_APPLICATION:-}" ]; then
     fi
     codesign --verify --strict "$APP"
 fi
-
-info() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Contents/Info.plist"; }
-IDENTIFIER=$(info CFBundleIdentifier)
-VERSION=$(info CFBundleShortVersionString)
-MIN_OS=$(info LSMinimumSystemVersion)
-HOST_ARCHS=$(lipo -archs "$APP/Contents/MacOS/PuggleSlides" | tr ' ' ',')
 
 # 3. The app package. Installers normally update any other copy of an app they find on the disk
 #    (in a build folder, say) instead of installing it where they should, so relocation is turned off.
@@ -143,4 +206,4 @@ elif [ -n "${DEVELOPER_ID_APPLICATION:-}" ]; then STATE="app signed with the Dev
 elif [ -n "${DEVELOPER_ID_INSTALLER:-}" ]; then STATE="app ad-hoc signed, installer signed with the Developer ID, not notarized"
 else STATE="ad-hoc signed, not notarized"
 fi
-echo "Built $OUTPUT (PuggleSlides $VERSION, $IDENTIFIER, $HOST_ARCHS, $STATE)"
+echo "Built $OUTPUT (PuggleSlides $VERSION, $IDENTIFIER, $HOST_ARCHS, $STATE$ICLOUD)"

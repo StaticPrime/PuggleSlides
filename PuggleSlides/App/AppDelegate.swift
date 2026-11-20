@@ -1,17 +1,40 @@
 import AppKit
+import CloudKit
 import PuggleSlidesKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = MenuBuilder.makeMainMenu()
         UserDefaults.standard.register(defaults: ["NSFullScreenMenuItemEverywhere": false])
+        CollaborationController.shared = CollaborationController(service: makeCollaborationService())
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        CollaborationController.shared.start()
         #if DEBUG
         DebugLaunchOptions.runIfRequested()
         SelfTest.runIfRequested()
         #endif
+    }
+
+    /// iCloud, where presentations are shared; in debug runs that ask for it, a stand-in for it.
+    private func makeCollaborationService() -> CollaborationService {
+        #if DEBUG
+        if StandInCloud.isRequested { return StandInCollaboration(me: StandInCloud.me, cloud: .shared) }
+        #endif
+        if CloudKitCollaboration.isEntitled { return CloudKitCollaboration() }
+        return UnavailableCollaboration(reason: "Sharing goes through iCloud, which this copy of PuggleSlides isn’t signed to use.")
+    }
+
+    // MARK: Shared presentations
+
+    /// Joins a presentation someone shared, from the link they sent, and opens it.
+    func application(_ application: NSApplication, userDidAcceptCloudKitShareWith metadata: CKShare.Metadata) {
+        CollaborationController.shared.accept(metadata)
+    }
+
+    func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
+        CollaborationController.shared.receivedPush(userInfo)
     }
 
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { true }
@@ -144,6 +167,10 @@ enum DebugLaunchOptions {
             case "link": controller.showLinkEditor()
             case "shapes": controller.presentSheet { dismiss in ShapeGalleryView { _ in dismiss() } }
             case "print": controller.ppPrintSettings(nil)
+            case "collaborate":
+                DispatchQueue.main.asyncAfter(deadline: .now() + (defaults.bool(forKey: "PPCollaborationDemo") ? 1.6 : 0)) {
+                    controller.showCollaborate()
+                }
             default: break
             }
             if let menu = defaults.string(forKey: "PPToolbarMenu") {
@@ -181,6 +208,13 @@ enum DebugLaunchOptions {
                 editor.addComment("Love this slide.", about: nil, onSlide: slideID)
             }
             if defaults.bool(forKey: "PPCommentDraft") { controller.ppInsertComment(nil) }
+            if defaults.bool(forKey: "PPCollaborationDemo") {
+                if defaults.string(forKey: "PPCollaborationDemoRole") == "commenter" {
+                    CollaborationDemo.startCommenting()
+                } else {
+                    CollaborationDemo.start(controller)
+                }
+            }
             // `-PPFind text` opens Find and replace looking for the text; `-PPFindNext 2` presses Next twice.
             if let text = defaults.string(forKey: "PPFind") {
                 controller.findState.query = text
@@ -214,7 +248,8 @@ enum DebugLaunchOptions {
                 appMenu.performActionForItem(at: appMenu.indexOfItem(withTitle: "About PuggleSlides"))
             }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+        let settle = defaults.bool(forKey: "PPCollaborationDemo") ? 5.0 : 2.5
+        DispatchQueue.main.asyncAfter(deadline: .now() + settle) {
             let presenter = defaults.bool(forKey: "PPPresenterView") ? NSApp.windows.first { $0 is PresenterPanel && $0.isVisible } : nil
             let slideshow = presenter ?? NSApp.windows.first { $0 is SlideshowWindow && $0.isVisible }
             guard let documentWindow = openedWindow?.window ?? NSApp.windows.first(where: { $0.windowController is DocumentWindowController }),
@@ -239,6 +274,68 @@ enum DebugLaunchOptions {
             fflush(stdout)
             exit(0)
         }
+    }
+}
+
+/// `-PPCollaborationDemo YES` (with `-PPStandInCloud YES`) shares the window's presentation on the stand-in "iCloud"
+/// with two people, who open it, edit and comment, for screenshots of a shared presentation. With
+/// `-PPCollaborationDemoRole commenter`, someone else shares a presentation with this Mac's person to comment on.
+/// `-PPDemoOffline YES` then takes this Mac offline, to show a shared presentation while iCloud can't be reached.
+enum CollaborationDemo {
+    static let ana = StandInPerson(Collaborator(id: "ana@example.com", name: "Ana Lopez", address: "ana@example.com"))
+    static let ben = StandInPerson(Collaborator(id: "ben@example.com", name: "Ben Carter", address: "ben@example.com"))
+
+    static func start(_ controller: DocumentWindowController) {
+        guard let document = controller.presentationDocument else { return }
+        // Made now, so the stand-in knows their names before they're invited.
+        _ = (ana, ben)
+        PresentationCollaboration.noticeDelay = 3
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Puggle product launch.pptx")
+        document.save(to: url, ofType: PresentationFormat.pptx.typeIdentifier, for: .saveAsOperation) { _ in
+            MainActor.assumeIsolated {
+                CollaborationController.shared.share(document, in: controller, access: .invited, permission: .edit) { _ in
+                    guard let id = document.collaboration?.id else { return }
+                    let service = CollaborationController.shared.service
+                    service.invite("ana@example.com", permission: .edit, to: id) { result in
+                        if case let .success(sharing) = result { document.collaboration?.sharingUpdated(sharing) }
+                    }
+                    service.invite("ben@example.com", permission: .comment, to: id) { result in
+                        if case let .success(sharing) = result { document.collaboration?.sharingUpdated(sharing) }
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        ana.join(id)
+                        ben.join(id)
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+                        ana.edit { presentation in
+                            guard let slide = presentation.slides.first, let index = slide.elements.firstIndex(where: { $0.shape?.text != nil }) else { return }
+                            presentation.slides[0].elements[index].shape?.text = TextBody("Updated by Ana")
+                        }
+                        if let slide = ben.presentation.slides.first?.id { ben.comment("Can we add the launch date here?", onSlide: slide) }
+                    }
+                    goOfflineIfAsked()
+                }
+            }
+        }
+    }
+
+    /// Ben shares a deck with this Mac's person, to comment on, and with Ana, to edit; it opens in a window of its own.
+    static func startCommenting() {
+        let id = ben.share(title: "Ben’s launch plan", presentation: SampleContent.make(),
+                           with: [(StandInCloud.me, .comment), (ana.person, .edit)])
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            guard let entry = CollaborationController.shared.sharedWithMe.first(where: { $0.id == id }) else { return }
+            CollaborationController.shared.openShared(entry)
+            DebugLaunchOptions.openedWindow = NSApp.windows.compactMap { $0.windowController as? DocumentWindowController }
+                .first { $0.presentationDocument?.sharedCopy?.id == id }
+            ana.join(id)
+        }
+        goOfflineIfAsked()
+    }
+
+    private static func goOfflineIfAsked() {
+        guard UserDefaults.standard.bool(forKey: "PPDemoOffline") else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { StandInCloud.shared.isReachable = false }
     }
 }
 #endif

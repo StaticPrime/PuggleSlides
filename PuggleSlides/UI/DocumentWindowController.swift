@@ -37,6 +37,19 @@ final class NotesSplitView: NSSplitView {
     }
 }
 
+/// A presentation's window. While its shared presentation can't save to iCloud it has no undo manager, so Undo and Redo
+/// do nothing and the presentation's own steps wait, untouched, until iCloud's back.
+final class DocumentWindow: NSWindow {
+    var pausesUndo: () -> Bool = { false }
+
+    override var undoManager: UndoManager? { pausesUndo() ? nil : super.undoManager }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if pausesUndo(), item.action == #selector(UndoCommands.undo(_:)) || item.action == #selector(UndoCommands.redo(_:)) { return false }
+        return super.validateUserInterfaceItem(item)
+    }
+}
+
 final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSSplitViewDelegate, ChromeActions, SidebarActions {
     let state = EditorState()
     let controller: PresentationController
@@ -88,9 +101,10 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSSp
         filmstrip = FilmstripView(controller: controller)
         grid = FilmstripView(controller: controller, isGrid: true)
         notes = SpeakerNotesView(controller: controller)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
-                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
-                              backing: .buffered, defer: false)
+        let window = DocumentWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
+                                    styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                                    backing: .buffered, defer: false)
+        window.pausesUndo = { [weak state] in state?.access == .offline }
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.titlebarSeparatorStyle = .none
@@ -327,7 +341,7 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSSp
     func refreshState() {
         let editing = canvas.editor
         state.isEditingText = editing != nil
-        let undoManager = editing?.textView.undoManager ?? controller.undoManager
+        let undoManager = state.access == .offline ? nil : editing?.textView.undoManager ?? controller.undoManager
         state.canUndo = undoManager?.canUndo ?? false
         state.canRedo = undoManager?.canRedo ?? false
         let kind = controller.selectionKind()
@@ -361,6 +375,12 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSSp
     override func synchronizeWindowTitleWithDocumentName() {
         super.synchronizeWindowTitleWithDocumentName()
         updateStatus()
+        // A shared presentation of this person's that moved or was renamed is still found by its new name, and everyone
+        // it's shared with sees the new name.
+        if let document = presentationDocument, let collaboration = document.collaboration, collaboration.isOwner, let url = document.fileURL {
+            CollaborationController.shared?.link(collaboration.id, to: url)
+            collaboration.titleChanged()
+        }
     }
 
     func updateStatus() {
@@ -371,7 +391,9 @@ final class DocumentWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         state.title = title
         state.formatBadge = document.fileURL == nil ? nil : document.format?.badge
-        if document.fileURL == nil {
+        if document.sharedCopy != nil {
+            state.saveStatus = .saved
+        } else if document.fileURL == nil {
             state.saveStatus = .draft
         } else {
             state.saveStatus = document.isDocumentEdited ? .edited : .saved

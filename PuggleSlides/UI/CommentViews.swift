@@ -73,7 +73,8 @@ struct CommentCardView: View {
                     Text(author).font(.system(size: 13, weight: .medium))
                 }
             }
-            if thread == nil || isSelected {
+            // While comments can only be read (a shared presentation that can't save to iCloud), there's no reply box.
+            if thread == nil || (isSelected && !controller.commentsAreReadOnly) {
                 VStack(alignment: .trailing, spacing: 8) {
                     TextField(thread == nil ? "Comment" : "Reply", text: $reply, axis: .vertical)
                         .textFieldStyle(.plain)
@@ -126,27 +127,32 @@ struct CommentCardView: View {
                         .font(.system(size: 11)).foregroundStyle(Theme.secondaryText)
                 }
                 Spacer(minLength: 4)
-                if isFirst {
+                if isFirst, !controller.commentsAreReadOnly {
                     ToolbarIconButton(symbol: "checkmark", help: "Mark as resolved and hide discussion") {
                         controller.setThread(thread.id, resolved: true)
                     }
                 }
-                Menu {
-                    Button("Edit") {
-                        editing = comment.id
-                        editText = comment.text
+                if !controller.commentsAreReadOnly {
+                    Menu {
+                        // In a shared presentation, people edit what they wrote, and delete it (or anything, if they edit).
+                        Button("Edit") {
+                            editing = comment.id
+                            editText = comment.text
+                        }
+                        .disabled(!controller.mayEditComment(comment))
+                        Button("Delete") { controller.deleteComment(comment.id, inThread: thread.id) }
+                            .disabled(!controller.mayDeleteComment(comment))
+                    } label: {
+                        Image(systemName: "ellipsis").rotationEffect(.degrees(90)).foregroundStyle(Theme.secondaryText)
                     }
-                    Button("Delete") { controller.deleteComment(comment.id, inThread: thread.id) }
-                } label: {
-                    Image(systemName: "ellipsis").rotationEffect(.degrees(90)).foregroundStyle(Theme.secondaryText)
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("More options")
+                    .accessibilityLabel("More options")
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("More options")
-                .accessibilityLabel("More options")
             }
-            if editing == comment.id {
+            if editing == comment.id, !controller.commentsAreReadOnly {
                 TextField("", text: $editText, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(size: 13))
@@ -260,7 +266,7 @@ struct CommentsPanel: View {
                         Text(item.thread.comments.count == 2 ? "1 reply" : "\(item.thread.comments.count - 1) replies")
                             .font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
                     }
-                    if item.thread.isResolved {
+                    if item.thread.isResolved, !controller.commentsAreReadOnly {
                         Button("Re-open") {
                             controller.setThread(item.thread.id, resolved: false)
                             actions.openComment(item.thread.id)

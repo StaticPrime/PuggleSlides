@@ -1,0 +1,35 @@
+// Signing for debug builds, the ones run from Xcode.
+//
+// Out of the box a debug build is signed to run on this Mac only, so it can't share presentations: its Collaborate
+// sheet says why. To share from Xcode, sign it with a team that has the App ID com.pugglesoft.PuggleSlides with iCloud
+// (CloudKit, with the container iCloud.com.pugglesoft.PuggleSlides) and Push Notifications: put these three lines,
+// with the team's ID, in Config/Signing.xcconfig, which Git ignores, and add an Apple ID in that team to Xcode's
+// Accounts settings. Xcode then makes the certificate and provisioning profile itself.
+//
+//     DEVELOPMENT_TEAM = ABCDE12345
+//     CODE_SIGN_IDENTITY = Apple Development
+//     CODE_SIGN_ENTITLEMENTS = Config/iCloud.entitlements
+//
+// If Xcode can't sign in to that Apple ID, make a macOS App Development provisioning profile for the App ID on the
+// developer website instead, put it in ~/Library/Developer/Xcode/UserData/Provisioning Profiles, and sign with it
+// by name; then Xcode needs no account at all:
+//
+//     CODE_SIGN_STYLE = Manual
+//     PROVISIONING_PROFILE_SPECIFIER = PuggleSlides Development
+//
+// iCloud.entitlements is PuggleSlides/PuggleSlides.entitlements with iCloud's added, so keep the two alike.
+//
+// Debug builds use iCloud's production environment, the one installed copies use, so a presentation shared from Xcode
+// reaches people who installed PuggleSlides, and theirs reach it. Production only takes the kinds of records its
+// schema already has. When PuggleSlides starts saving a new kind (and once at the start, for iCloud's own record of a
+// share), add this line to Signing.xcconfig, share a presentation, deploy the development schema to production in
+// CloudKit Console, then take the line out again:
+//
+//     ICLOUD_ENVIRONMENT = Development
+
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = -
+CODE_SIGN_ENTITLEMENTS = PuggleSlides/PuggleSlides.entitlements
+ICLOUD_ENVIRONMENT = Production
+
+#include? "Signing.xcconfig"

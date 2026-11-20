@@ -76,6 +76,11 @@ final class SlideTextEditor: NSObject, NSTextViewDelegate {
     let isNew: Bool
     weak var canvas: SlideEditingView?
     private let layoutManager = SlideLayoutManager()
+    /// In a shared presentation: the text as the presentation last had it, from here or from someone else, so that a
+    /// change someone else makes to it shows up here.
+    var knownBody: TextBody
+    /// In a shared presentation: sends the text being typed a moment after each pause.
+    var livePush: DispatchWorkItem?
 
     init(element: SlideElement, style: ElementStyle, canvas: SlideEditingView, isNew: Bool, cell: (row: Int, column: Int)? = nil) {
         elementID = element.id
@@ -91,6 +96,7 @@ final class SlideTextEditor: NSObject, NSTextViewDelegate {
         }
         container = FlippedContainerView()
         textView = SlideTextView(frame: .zero)
+        knownBody = originalBody
         super.init()
         textView.textContainer?.replaceLayoutManager(layoutManager)
         layoutManager.showsEmptyBullets = true
@@ -225,6 +231,7 @@ final class SlideTextEditor: NSObject, NSTextViewDelegate {
     }
 
     func end() {
+        livePush?.cancel()
         container.removeFromSuperview()
     }
 
@@ -232,6 +239,30 @@ final class SlideTextEditor: NSObject, NSTextViewDelegate {
         updateTrailingBullet()
         grow()
         canvas?.onEditingChange?()
+        scheduleLivePush()
+    }
+
+    /// In a shared presentation, the text goes to the others as it's typed: a moment after each pause.
+    private func scheduleLivePush() {
+        guard let canvas, canvas.controller.collaboration?.isLive == true else { return }
+        livePush?.cancel()
+        let work = DispatchWorkItem { [weak canvas] in canvas?.pushEditingText() }
+        livePush = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    /// Shows the text as someone else changed it, keeping the selection where it was as far as it can.
+    func replaceText(with body: TextBody, style: ElementStyle) {
+        self.style = style
+        let selection = textView.selectedRange()
+        let paragraphs = style.resolvedParagraphs(body)
+        textView.textStorage?.setAttributedString(SlideText.attributedString(paragraphs, body: body, style: style, trailingSpace: false))
+        let length = textView.string.utf16.count
+        let start = min(selection.location, length)
+        textView.setSelectedRange(NSRange(location: start, length: min(selection.length, length - start)))
+        knownBody = body
+        updateTrailingBullet()
+        layout()
     }
 
     func textViewDidChangeSelection(_ notification: Notification) {
@@ -265,6 +296,7 @@ final class SlideTextEditor: NSObject, NSTextViewDelegate {
                 canvas.controller.fitTableFrame(&edited, style: presentation.style(for: edited, on: slide))
                 presentation.slides[slideIndex].elements[index] = edited
             }
+            knownBody = body
             layout()
             return
         }
@@ -626,7 +658,7 @@ final class FlippedContainerView: NSView {
 extension SlideEditingView {
     /// Starts editing an element's text, with the insertion point at `point` (or at the end).
     func beginEditing(_ id: UUID, at point: SlidePoint?, isNew: Bool = false) {
-        guard editor?.elementID != id else { return }
+        guard editor?.elementID != id, controller.canEditContent else { return }
         if editor != nil { endEditing() }
         guard let slide = controller.currentSlide, var element = slide.element(id: id), element.shape != nil, !element.isLine else { return }
         controller.selectElements([id])
@@ -654,6 +686,7 @@ extension SlideEditingView {
 
     /// Starts editing a table cell's text, with the insertion point at `point` (or at the end).
     func beginEditingCell(_ id: UUID, row: Int, column: Int, at point: SlidePoint?) {
+        guard controller.canEditContent else { return }
         if let editor, editor.elementID == id, let cell = editor.cell, cell.row == row, cell.column == column { return }
         if editor != nil { endEditing() }
         guard let slide = controller.currentSlide, let element = slide.element(id: id), let table = element.table,
@@ -688,6 +721,44 @@ extension SlideEditingView {
         beginEditingCell(id, row: next.row, column: next.column, at: nil)
         // Moving into a cell selects its text.
         editor?.textView.selectAll(nil)
+    }
+
+    /// In a shared presentation: the text being typed goes into the presentation, and from there to the others, while
+    /// it's still being edited (without fitting, which happens when editing ends).
+    func pushEditingText() {
+        guard let session = editor, controller.collaboration?.isLive == true, !session.textView.hasMarkedText(),
+              let slideIndex = session.slideID.flatMap(controller.presentation.slideIndex(id:)) else { return }
+        session.livePush?.cancel()
+        let body = session.currentBody()
+        let id = session.elementID, cell = session.cell
+        controller.updateInteractive { presentation in
+            guard let index = presentation.slides[slideIndex].elementIndex(id: id) else { return }
+            if let cell {
+                guard var table = presentation.slides[slideIndex].elements[index].table, table.cells.indices.contains(cell.row),
+                      table.cells[cell.row].indices.contains(cell.column) else { return }
+                table.cells[cell.row][cell.column].text = body
+                presentation.slides[slideIndex].elements[index].table = table
+            } else {
+                presentation.slides[slideIndex].elements[index].shape?.text = body
+            }
+        }
+        session.knownBody = body
+        controller.collaboration?.captureLocal()
+    }
+
+    /// In a shared presentation: someone else changed the text being edited here, so it shows their change.
+    func reloadEditingText() {
+        guard let session = editor, let slideID = session.slideID, let slide = controller.presentation.slides.first(where: { $0.id == slideID }),
+              let element = slide.element(id: session.elementID) else { return }
+        let body: TextBody
+        if let cell = session.cell {
+            guard let table = element.table, table.cells.indices.contains(cell.row), table.cells[cell.row].indices.contains(cell.column) else { return }
+            body = table.cells[cell.row][cell.column].text
+        } else {
+            body = element.shape?.text ?? TextBody()
+        }
+        guard body != session.knownBody else { return }
+        session.replaceText(with: body, style: controller.presentation.style(for: element, on: slide))
     }
 
     /// Commits the text being edited (with text fitting) as one undo step and returns to the shape.

@@ -17,6 +17,10 @@ final class PresentationDocument: NSDocument {
     var onReload: (() -> Void)?
     /// Asked to commit any text being edited before the presentation is saved.
     var onWillSave: (() -> Void)?
+    /// For a presentation someone shared with this person: which one it is. It has no file here.
+    var sharedCopy: SharedCopy?
+    /// While the presentation is shared: its part in that.
+    var collaboration: PresentationCollaboration?
 
     /// Content parsed off the main thread, applied once the main actor can take it.
     nonisolated(unsafe) private var pendingFile: PresentationFile?
@@ -46,7 +50,9 @@ final class PresentationDocument: NSDocument {
             fileURL = nil
             fileType = PresentationFormat.pptx.typeIdentifier
         }
-        addWindowController(DocumentWindowController(document: self))
+        let controller = DocumentWindowController(document: self)
+        addWindowController(controller)
+        CollaborationController.shared?.documentOpened(self, in: controller)
     }
 
     // MARK: Reading and writing
@@ -100,12 +106,86 @@ final class PresentationDocument: NSDocument {
 
     override var displayName: String! {
         get {
+            if let sharedCopy { return sharedCopy.title }
             if fileURL == nil, let title = customTitle ?? importedFileName { return title }
             let name: String = super.displayName
             if fileURL == nil, name.hasPrefix("Untitled") { return name.replacingOccurrences(of: "Untitled", with: "Untitled presentation") }
             return name
         }
         set { super.displayName = newValue }
+    }
+
+    // MARK: Shared copies
+
+    /// A presentation shared with this person lives in iCloud: it's never saved here unless they save a copy.
+    override var isDocumentEdited: Bool {
+        if sharedCopy != nil { return collaboration?.hasUnsentChanges ?? false }
+        return super.isDocumentEdited
+    }
+
+    override var hasUnautosavedChanges: Bool { sharedCopy != nil ? false : super.hasUnautosavedChanges }
+
+    override func autosave(withImplicitCancellability autosavingIsImplicitlyCancellable: Bool, completionHandler: @escaping (Error?) -> Void) {
+        guard sharedCopy == nil else { return completionHandler(nil) }
+        super.autosave(withImplicitCancellability: autosavingIsImplicitlyCancellable, completionHandler: completionHandler)
+    }
+
+    /// A presentation shared with this person has no file here to move or rename, and its name is its owner's to change.
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if sharedCopy != nil, [#selector(NSDocument.move(_:)), #selector(NSDocument.revertToSaved(_:)), #selector(NSDocument.browseVersions(_:))]
+            .contains(item.action) {
+            return false
+        }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    /// Saving a presentation shared with this person keeps a copy of it on this Mac.
+    override func save(_ sender: Any?) {
+        if sharedCopy != nil {
+            saveTo(sender)
+        } else {
+            super.save(sender)
+        }
+    }
+
+    /// Before closing a shared presentation with changes that haven't reached iCloud, the person chooses.
+    override func canClose(withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?, contextInfo: UnsafeMutableRawPointer?) {
+        guard let collaboration, collaboration.hasUnsentChanges, let window = windowControllers.first?.window else {
+            if sharedCopy != nil {
+                Self.answer(true, to: delegate, selector: shouldCloseSelector, document: self, contextInfo: contextInfo)
+                return
+            }
+            super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: contextInfo)
+            return
+        }
+        collaboration.flush()
+        let alert = NSAlert()
+        alert.messageText = "Your latest changes to “\(displayName ?? "the presentation")” haven’t reached iCloud yet."
+        alert.informativeText = "The people you share it with won’t see them if you close it now. Wait a moment for iCloud, or keep a copy on this Mac."
+        alert.addButton(withTitle: "Keep Open")
+        alert.addButton(withTitle: "Close Anyway")
+        alert.buttons[1].hasDestructiveAction = true
+        let context = UncheckedPointer(pointer: contextInfo)
+        alert.beginSheetModal(for: window) { response in
+            if response == .alertSecondButtonReturn, self.sharedCopy == nil {
+                super.canClose(withDelegate: delegate, shouldClose: shouldCloseSelector, contextInfo: context.pointer)
+            } else {
+                Self.answer(response == .alertSecondButtonReturn, to: delegate, selector: shouldCloseSelector, document: self, contextInfo: context.pointer)
+            }
+        }
+    }
+
+    /// Calls `-document:shouldClose:contextInfo:` on whoever asked.
+    private static func answer(_ shouldClose: Bool, to delegate: Any, selector: Selector?, document: NSDocument, contextInfo: UnsafeMutableRawPointer?) {
+        guard let selector, let object = delegate as? NSObject, let method = object.method(for: selector) else { return }
+        typealias Callback = @convention(c) (NSObject, Selector, NSDocument, Bool, UnsafeMutableRawPointer?) -> Void
+        unsafeBitCast(method, to: Callback.self)(object, selector, document, shouldClose, contextInfo)
+    }
+
+    override func close() {
+        collaboration?.close()
+        collaboration = nil
+        super.close()
     }
 
     // MARK: Status
@@ -119,4 +199,9 @@ final class PresentationDocument: NSDocument {
         super.updateChangeCount(withToken: changeCountToken, for: saveOperation)
         onStatusChange?()
     }
+}
+
+/// A context pointer handed through a completion handler.
+private struct UncheckedPointer: @unchecked Sendable {
+    let pointer: UnsafeMutableRawPointer?
 }

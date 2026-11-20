@@ -66,6 +66,7 @@ struct ShortcutsView: View {
                 ("Show or hide comments", "⌥⇧⌘J"),
                 ("Find / find and replace", "⌘F / ⇧⌘H"),
                 ("Find again / previous", "⌘G / ⇧⌘G"),
+                ("Collaborate", "⌥⌘C"),
             ]),
         ],
     ]

@@ -10,7 +10,10 @@
 #   NOTARY_API_KEY              an App Store Connect API key (the .p8 file's text), for notarizing
 #   NOTARY_KEY_ID               that key's ID
 #   NOTARY_ISSUER_ID            the issuer ID shown above the keys in App Store Connect
-# Without them, the release is published unsigned, with a warning.
+# Without them, the release is published unsigned, with a warning. And for an app that uses iCloud (one with
+# Config/iCloud.entitlements), this one too, or a signed release stops rather than publish a copy without iCloud:
+#   DEVELOPER_ID_PROFILE_BASE64 a Developer ID provisioning profile, base64-encoded, for an app that uses
+#                               iCloud or pushes: the app is signed with what it allows
 name: Release
 
 on:
@@ -71,6 +74,7 @@ jobs:
           NOTARY_API_KEY: ${{ secrets.NOTARY_API_KEY }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          PROFILE_BASE64: ${{ secrets.DEVELOPER_ID_PROFILE_BASE64 }}
         run: |
           for name in P12_PASSWORD NOTARY_API_KEY NOTARY_KEY_ID NOTARY_ISSUER_ID; do
             if [ -z "${!name}" ]; then
@@ -78,6 +82,10 @@ jobs:
               exit 1
             fi
           done
+          if [ -f Config/iCloud.entitlements ] && [ -z "$PROFILE_BASE64" ]; then
+            echo "::error::This app uses iCloud, but the repository secret DEVELOPER_ID_PROFILE_BASE64 is missing or empty, so its installer couldn't be signed for iCloud. Add the Developer ID provisioning profile, base64-encoded (see the top of release.yml), and release again."
+            exit 1
+          fi
           keychain="$RUNNER_TEMP/signing.keychain-db"
           keychain_password=$(uuidgen)
           security create-keychain -p "$keychain_password" "$keychain"
@@ -100,6 +108,14 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$NOTARY_API_KEY" > "$RUNNER_TEMP/notary-key.p8"
+          if [ -n "$PROFILE_BASE64" ]; then
+            printf '%s' "$PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.provisionprofile"
+            if ! security cms -D -i "$RUNNER_TEMP/developer-id.provisionprofile" > /dev/null 2>&1; then
+              echo "::error::The secret DEVELOPER_ID_PROFILE_BASE64 isn't a base64-encoded provisioning profile. Copy it again with: base64 -i <the profile> | pbcopy"
+              exit 1
+            fi
+            echo "DEVELOPER_ID_PROFILE=$RUNNER_TEMP/developer-id.provisionprofile" >> "$GITHUB_ENV"
+          fi
           {
             echo "DEVELOPER_ID_APPLICATION=$application"
             echo "DEVELOPER_ID_INSTALLER=$installer"
@@ -137,4 +153,4 @@ jobs:
         if: ${{ always() && env.SIGNING_KEYCHAIN != '' }}
         run: |
           security delete-keychain "$SIGNING_KEYCHAIN" || true
-          rm -f "$RUNNER_TEMP/notary-key.p8"
+          rm -f "$RUNNER_TEMP/notary-key.p8" "$RUNNER_TEMP/developer-id.provisionprofile"

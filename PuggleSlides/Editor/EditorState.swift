@@ -96,7 +96,20 @@ struct ShapeSummary: Equatable {
     var tail: LineEnd?
 }
 
-/// Everything the SwiftUI header, toolbar and panels display for one window.
+/// What can be done to a presentation here.
+enum DocumentAccess: Equatable {
+    /// Everything: the presentation is this person's, or shared with them to edit.
+    case full
+    /// Shared with them to see and comment on: comments, but no changes to the slides.
+    case commentOnly
+    /// Nothing for now: its shared copy is still on its way.
+    case locked
+    /// A shared presentation whose changes can't be saved to iCloud just now (the Mac is offline, say): it can be seen,
+    /// presented, printed and copied, comments included, but nothing in it changes until iCloud takes changes again.
+    /// Nothing is kept to send later.
+    case offline
+}
+
 /// Insert ▸ Comment: the comment being written, about an object or the slide.
 struct CommentDraft: Equatable {
     var slideID: UUID
@@ -145,6 +158,17 @@ final class EditorState {
     var commentDraft: CommentDraft?
     /// The thread whose card is selected in the column.
     var selectedCommentID: UUID?
+
+    /// What sharing allows here.
+    var access: DocumentAccess = .full
+    /// Who the presentation is shared with, and how its shared copy is keeping up.
+    let collaboration = CollaborationState()
+
+    /// Only a presentation's owner shares it: people it's shared with don't get the Collaborate button.
+    var showsCollaborateButton: Bool { !collaboration.isShared || collaboration.isOwner }
+    /// Comments can be added, answered and changed by everyone who can edit or comment, but not while a shared copy is
+    /// still opening or can't save to iCloud.
+    var canComment: Bool { access == .full || access == .commentOnly }
 
     var zoomLabel: String { zoomIsFit ? "Fit" : "\(Int((zoom * 100).rounded()))%" }
 }

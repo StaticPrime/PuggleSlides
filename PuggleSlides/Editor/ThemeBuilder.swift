@@ -6,8 +6,11 @@ import PuggleSlidesKit
 /// the real theme, so the document stays current, and leaving the builder records the whole visit as one undo step.
 struct ThemeBuilderSession {
     let themeID: UUID
-    /// The presentation as it was when the builder opened; its slides and other themes stay as they were.
-    let base: Presentation
+    /// The presentation as it was when the builder opened; its slides and other themes stay as they were. In a shared
+    /// presentation, other people's changes made while the builder is open come into it too.
+    var base: Presentation
+    /// The guides when the builder opened, so that only guides changed in the builder replace the presentation's.
+    let initialGuides: [Guide]
     /// The stand-in: page one is the theme, the rest its layouts, each on a layout of its own with nothing on it.
     var proxy: Presentation
     /// The builder's own undo history, kept apart from the document's.
@@ -33,7 +36,7 @@ struct ThemeBuilderSession {
         var proxy = real
         proxy.themes = [standIn]
         proxy.slides = pages
-        return ThemeBuilderSession(themeID: themeID, base: real, proxy: proxy, returnSlideID: returnSlideID)
+        return ThemeBuilderSession(themeID: themeID, base: real, initialGuides: real.guides, proxy: proxy, returnSlideID: returnSlideID)
     }
 
     func isMaster(_ pageID: UUID?) -> Bool { pageID == themeID }
@@ -75,8 +78,9 @@ struct ThemeBuilderSession {
             return layout
         }
         real.themes[themeIndex] = theme
-        real.media = proxy.media
-        real.guides = proxy.guides
+        // Media added in the builder join those of the presentation (others may have added some meanwhile).
+        real.media = base.media.merging(proxy.media) { _, page in page }
+        if proxy.guides != initialGuides { real.guides = proxy.guides }
         return real
     }
 }
@@ -86,7 +90,7 @@ extension PresentationController {
 
     /// Slide ▸ Edit theme: opens on the current slide's layout.
     func openThemeBuilder() {
-        guard builder == nil, let theme = currentSlide.map(presentation.theme(for:)) ?? presentation.themes.first else { return }
+        guard builder == nil, canEditContent, let theme = currentSlide.map(presentation.theme(for:)) ?? presentation.themes.first else { return }
         let layoutID = currentSlide?.layoutID
         guard let session = ThemeBuilderSession.make(from: presentation, themeID: theme.id, returnSlideID: currentSlideID) else { return }
         startThemeBuilder(session, showing: layoutID.flatMap { id in session.proxy.slides.contains { $0.id == id } ? id : nil } ?? theme.id)
@@ -96,6 +100,12 @@ extension PresentationController {
     func closeThemeBuilder() {
         guard let session = builder else { return }
         let final = session.real(from: session.proxy)
+        // Shared: everything done in the builder went to the others as it was done; leaving it makes the undo step.
+        if let collaboration, collaboration.isLive {
+            finishThemeBuilder(restoring: final, returnTo: session.returnSlideID)
+            collaboration.recorded(actionName: "Edit Theme", selection: SharedSelection(slideID: session.returnSlideID, elements: []))
+            return
+        }
         finishThemeBuilder(restoring: session.base, returnTo: session.returnSlideID)
         if final != session.base {
             perform("Edit Theme", update: [.slides, .content, .theme]) { $0 = final }
