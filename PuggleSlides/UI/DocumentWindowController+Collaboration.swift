@@ -132,7 +132,7 @@ extension DocumentWindowController {
         case #selector(SlideCommands.ppLeaveShared(_:)):
             menuItem.isHidden = state.showsCollaborateButton
             return presentationDocument?.collaboration?.isOwner == false
-        case #selector(SlideCommands.ppRename(_:)):
+        case #selector(NSDocument.rename(_:)):
             return presentationDocument?.sharedCopy == nil
         case #selector(SlideCommands.ppInsertComment(_:)):
             if !state.canComment { return false }

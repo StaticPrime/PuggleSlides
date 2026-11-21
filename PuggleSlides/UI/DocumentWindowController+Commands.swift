@@ -300,7 +300,9 @@ extension DocumentWindowController: SlideCommands, NSMenuItemValidation {
         }
     }
 
-    func ppRename(_ sender: Any?) {
+    /// File ▸ Rename: the name in the header, all of it selected, ready to type over. It answers the standard rename
+    /// command, so the File menu has this one Rename and macOS doesn't add a second beside Make a copy.
+    @objc(renameDocument:) func renameFromMenu(_ sender: Any?) {
         state.renameRequest += 1
     }
 

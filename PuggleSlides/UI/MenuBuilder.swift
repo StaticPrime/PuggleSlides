@@ -44,7 +44,6 @@ import PuggleSlidesKit
     func ppDownload(_ sender: Any?)
     func ppPrintSettings(_ sender: Any?)
     func ppPrint(_ sender: Any?)
-    func ppRename(_ sender: Any?)
     func ppPageSetup(_ sender: Any?)
     func ppPasteWithoutFormatting(_ sender: Any?)
     func ppDuplicate(_ sender: Any?)
@@ -279,7 +278,8 @@ enum MenuBuilder {
             .separator(),
             item("Save", #selector(NSDocument.save(_:)), "s", symbol: "square.and.arrow.down"),
             submenu("Download", symbol: "arrow.down.to.line", downloadItems()),
-            item("Rename", #selector(SlideCommands.ppRename(_:)), symbol: "pencil"),
+            // The standard rename command, answered by the window: with it here macOS adds no Rename of its own.
+            item("Rename", #selector(NSDocument.rename(_:)), symbol: "pencil"),
             item("Move…", #selector(NSDocument.move(_:)), symbol: "folder.badge.gearshape"),
             .separator(),
             submenu("Version history", symbol: "clock.arrow.circlepath", [

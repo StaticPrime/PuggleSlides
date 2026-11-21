@@ -176,8 +176,20 @@ struct HeaderView: View {
         .onAppear { titleText = state.title }
         .onChange(of: state.title) { _, newValue in if !titleFocused { titleText = newValue } }
         .onChange(of: titleFocused) { _, focused in if !focused { commitTitle() } }
-        .onChange(of: state.renameRequest) { _, _ in titleFocused = true }
+        .onChange(of: state.renameRequest) { _, _ in
+            titleFocused = true
+            selectWholeTitle()
+        }
         .onExitCommand { titleText = state.title; titleFocused = false; actions.focusCanvas() }
+    }
+
+    /// File ▸ Rename: once the name's field is being edited, all of the name is selected, so typing replaces it.
+    private func selectWholeTitle(attempt: Int = 0) {
+        if let field = NSApp.keyWindow?.firstResponder as? NSTextView, field.isFieldEditor {
+            field.selectAll(nil)
+        } else if attempt < 10 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { selectWholeTitle(attempt: attempt + 1) }
+        }
     }
 
     private func trailingControls(showsStatus: Bool, compact: Bool) -> some View {
