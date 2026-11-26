@@ -116,7 +116,7 @@ extension DocumentWindowController {
         #selector(SlideCommands.ppToggleGridView(_:)), #selector(SlideCommands.ppToggleSpeakerNotes(_:)), #selector(SlideCommands.ppPlayClip(_:)),
         #selector(SlideCommands.ppZoomIn(_:)), #selector(SlideCommands.ppZoomOut(_:)), #selector(SlideCommands.ppZoomFit(_:)), #selector(SlideCommands.ppSetZoom(_:)),
         #selector(SlideCommands.ppShowRuler(_:)), #selector(SlideCommands.ppShowGuides(_:)), #selector(SlideCommands.ppToggleSpellCheck(_:)),
-        #selector(SlideCommands.ppPreferences(_:)), #selector(SlideCommands.ppShowShortcuts(_:)),
+        #selector(SlideCommands.ppShowShortcuts(_:)),
         #selector(SlideCommands.ppCollaborate(_:)), #selector(SlideCommands.ppLeaveShared(_:)),
         #selector(UndoCommands.undo(_:)), #selector(UndoCommands.redo(_:)),
     ]

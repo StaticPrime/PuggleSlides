@@ -57,7 +57,15 @@ if ! xcodebuild -project PuggleSlides.xcodeproj -scheme PuggleSlides -configurat
     exit 1
 fi
 APP="$WORK/PuggleSlides.xcarchive/Products/Applications/PuggleSlides.app"
-codesign --verify --strict "$APP"
+codesign --verify --strict --deep "$APP"
+
+# The update installer service inside the app installs updates, which the app's sandbox can't: it must be there,
+# and not sandboxed itself.
+INSTALLER_SERVICE="$APP/Contents/XPCServices/UpdateInstaller.xpc"
+[ -d "$INSTALLER_SERVICE" ] || fail "the app has no update installer service ($INSTALLER_SERVICE)"
+if codesign -d --entitlements - --xml "$INSTALLER_SERVICE" 2>/dev/null | grep -q "com.apple.security.app-sandbox"; then
+    fail "the update installer service is sandboxed, so it couldn't install updates"
+fi
 
 info() { /usr/libexec/PlistBuddy -c "Print :$1" "$APP/Contents/Info.plist"; }
 IDENTIFIER=$(info CFBundleIdentifier)
@@ -113,11 +121,20 @@ add_icloud_entitlements() {
 ICLOUD=""
 
 # 2. With a Developer ID, sign the app again for distribution: the hardened runtime, a secure timestamp,
-#    and the same entitlements the build gave it (with iCloud's, given a profile). The app has no nested
-#    code, so one signature covers it.
+#    and the same entitlements the build gave it (with iCloud's, given a profile). Its nested code, the update
+#    installer service, is signed first, the same way with its own (lack of) entitlements, so the app's
+#    signature seals the service's.
 if [ -n "${DEVELOPER_ID_APPLICATION:-}" ]; then
-    echo "Signing PuggleSlides.app with the Developer ID…"
     codesign -d --entitlements - --xml "$APP" > "$WORK/entitlements.plist" 2>/dev/null || true
+    codesign -d --entitlements - --xml "$INSTALLER_SERVICE" > "$WORK/service-entitlements.plist" 2>/dev/null || true
+    echo "Signing the update installer service with the Developer ID…"
+    if [ -s "$WORK/service-entitlements.plist" ]; then
+        codesign --force --options runtime --timestamp --entitlements "$WORK/service-entitlements.plist" \
+            --sign "$DEVELOPER_ID_APPLICATION" "$INSTALLER_SERVICE"
+    else
+        codesign --force --options runtime --timestamp --sign "$DEVELOPER_ID_APPLICATION" "$INSTALLER_SERVICE"
+    fi
+    echo "Signing PuggleSlides.app with the Developer ID…"
     if [ -n "${DEVELOPER_ID_PROFILE:-}" ]; then
         echo "Signing it for iCloud, with the provisioning profile…"
         add_icloud_entitlements
@@ -128,7 +145,7 @@ if [ -n "${DEVELOPER_ID_APPLICATION:-}" ]; then
     else
         codesign --force --options runtime --timestamp --sign "$DEVELOPER_ID_APPLICATION" "$APP"
     fi
-    codesign --verify --strict "$APP"
+    codesign --verify --strict --deep "$APP"
 fi
 
 # 3. The app package. Installers normally update any other copy of an app they find on the disk

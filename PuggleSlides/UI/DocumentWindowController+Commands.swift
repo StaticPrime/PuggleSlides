@@ -626,15 +626,10 @@ extension DocumentWindowController: SlideCommands, NSMenuItemValidation {
 
     // MARK: Tools and Help
 
+    /// The same setting as Settings ▸ Check spelling as you type.
     func ppToggleSpellCheck(_ sender: Any?) {
-        let on = !(UserDefaults.standard.object(forKey: "PPSpellCheck") as? Bool ?? true)
-        UserDefaults.standard.set(on, forKey: "PPSpellCheck")
-        canvas.editor?.textView.isContinuousSpellCheckingEnabled = on
-        notes.textView.isContinuousSpellCheckingEnabled = on
-    }
-
-    func ppPreferences(_ sender: Any?) {
-        presentSheet { dismiss in PreferencesView(dismiss: dismiss) }
+        UserDefaults.standard.set(!TypingPreferences.checksSpelling, forKey: TypingPreferences.spellCheckKey)
+        TypingPreferences.applyEverywhere()
     }
 
     func ppShowShortcuts(_ sender: Any?) {
@@ -712,7 +707,7 @@ extension DocumentWindowController: SlideCommands, NSMenuItemValidation {
              #selector(SlideCommands.ppInsertShape(_:)), #selector(SlideCommands.ppInsertLine(_:)), #selector(SlideCommands.ppSlideNumbers(_:)):
             return hasSlide
         case #selector(SlideCommands.ppToggleSpellCheck(_:)):
-            menuItem.state = UserDefaults.standard.object(forKey: "PPSpellCheck") as? Bool ?? true ? .on : .off
+            menuItem.state = TypingPreferences.checksSpelling ? .on : .off
         case #selector(SlideCommands.ppApplyLayout(_:)):
             return hasSlide
         default:

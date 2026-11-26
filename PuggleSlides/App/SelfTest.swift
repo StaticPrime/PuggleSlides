@@ -463,6 +463,7 @@ enum SelfTest {
         addPhase3Steps(window)
         addPhase4Steps(window)
         addPhase5Steps(window)
+        addTypingSteps(window)
 
         DispatchQueue.main.async { runSteps() }
     }

@@ -1,6 +1,8 @@
 # Builds the installer for a version tag (vMAJOR.MINOR.FIX, pushed by Tools/release.sh) and publishes
 # it as a GitHub release. The installer keeps the same name in every release, so
 # https://github.com/<owner>/<repo>/releases/latest/download/<App>.pkg always downloads the newest one.
+# Next to it goes update.json, which describes it (version, build, minimum macOS, address, size and SHA-256)
+# for the apps' own update check: they read .../releases/latest/download/update.json as they open.
 #
 # With these repository secrets, the app and the installer are signed with the Developer ID and the
 # installer is notarized by Apple, so it opens without any warning:
@@ -142,11 +144,30 @@ jobs:
             exit 1
           fi
 
+      # What the apps' update check reads (see the top of this file): the installer's address in this release,
+      # its size and its SHA-256, which the app checks the download against before installing it.
+      - name: Describe the update for the apps' update check
+        run: |
+          pkg="build/$APP.pkg"
+          info="build/Installer/$APP.xcarchive/Products/Applications/$APP.app/Contents/Info.plist"
+          build=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$info")
+          minimum=$(/usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$info")
+          size=$(stat -f %z "$pkg")
+          sha256=$(shasum -a 256 "$pkg" | cut -d ' ' -f 1)
+          url="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/$APP.pkg"
+          printf '{\n  "version": "%s",\n  "build": %s,\n  "minimumSystemVersion": "%s",\n  "url": "%s",\n  "size": %s,\n  "sha256": "%s"\n}\n' \
+            "$VERSION" "$build" "$minimum" "$url" "$size" "$sha256" > build/update.json
+          # Reading every field back checks the file is JSON the apps can read.
+          for key in version build minimumSystemVersion url size sha256; do
+            plutil -extract "$key" raw -o - build/update.json > /dev/null
+          done
+          cat build/update.json
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "build/$APP.pkg" \
+          gh release create "$GITHUB_REF_NAME" "build/$APP.pkg" build/update.json \
             --verify-tag --latest --generate-notes --title "$APP $VERSION"
 
       - name: Remove the signing keychain and key

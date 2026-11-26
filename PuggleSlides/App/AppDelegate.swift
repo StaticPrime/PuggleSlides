@@ -7,9 +7,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = MenuBuilder.makeMainMenu()
         UserDefaults.standard.register(defaults: ["NSFullScreenMenuItemEverywhere": false])
         CollaborationController.shared = CollaborationController(service: makeCollaborationService())
+        // The splash screen and the update check, before any presentation opens.
+        let updates = UpdateController.shared
+        updates.onHandoff = { LaunchHandoff($0)?.perform() }
+        updates.handoffsForOpenDocuments = { LaunchHandoff.forOpenSharedCopies() }
+        updates.start()
+    }
+
+    // MARK: Opening presentations, once the app has opened (see UpdateController)
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        UpdateController.shared.whenLaunched(opening: urls)
+    }
+
+    func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        UpdateController.shared.whenLaunchedOpenUntitled()
+        return true
+    }
+
+    /// Never while macOS's installer is changing the app.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        UpdateController.shared.isInstalling ? .terminateCancel : .terminateNow
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // AppKit opens no untitled presentation while the splash screen is up, so the update controller does, when this
+        // launch is one that would have.
+        UpdateController.shared.launchIsDefault = notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool ?? false
         CollaborationController.shared.start()
         #if DEBUG
         DebugLaunchOptions.runIfRequested()
@@ -30,7 +54,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Joins a presentation someone shared, from the link they sent, and opens it.
     func application(_ application: NSApplication, userDidAcceptCloudKitShareWith metadata: CKShare.Metadata) {
-        CollaborationController.shared.accept(metadata)
+        UpdateController.shared.whenLaunched(handoff: metadata.share.url.map { LaunchHandoff.invitation($0).encoded }) {
+            CollaborationController.shared.accept(metadata)
+        }
     }
 
     func application(_ application: NSApplication, didReceiveRemoteNotification userInfo: [String: Any]) {
@@ -42,6 +68,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
     @objc func showAboutWindow(_ sender: Any?) { AboutWindowController.show() }
+
+    @objc func showSettings(_ sender: Any?) { SettingsWindowController.show() }
+}
+
+/// Something PuggleSlides was asked to open as it started, kept for the new version when it restarts to finish updating
+/// first (presentations with files are opened in the new version directly).
+enum LaunchHandoff: Codable {
+    /// An invitation link to a presentation someone shared.
+    case invitation(URL)
+    /// A presentation someone shares, open here or named by a notification.
+    case shared(id: UUID, ownerID: String, title: String)
+
+    var encoded: String { (try? JSONEncoder().encode(self)).map { String(decoding: $0, as: UTF8.self) } ?? "" }
+
+    init?(_ encoded: String) {
+        guard let handoff = try? JSONDecoder().decode(LaunchHandoff.self, from: Data(encoded.utf8)) else { return nil }
+        self = handoff
+    }
+
+    func perform() {
+        guard let controller = CollaborationController.shared else { return }
+        switch self {
+        case let .invitation(url):
+            controller.openInvitationLink(url) { error in
+                guard let error else { return }
+                let alert = NSAlert()
+                alert.messageText = "The shared presentation couldn’t be opened."
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
+        case let .shared(id, ownerID, title):
+            let entry = controller.sharedWithMe.first { $0.id == id } ?? SharedDocumentEntry(id: id, title: title, ownerName: "", ownerID: ownerID)
+            controller.openShared(entry)
+        }
+    }
+
+    /// The open presentations someone else shares, which have no file of their own here.
+    static func forOpenSharedCopies() -> [String] {
+        NSDocumentController.shared.documents.compactMap { ($0 as? PresentationDocument)?.sharedCopy }.map {
+            LaunchHandoff.shared(id: $0.id, ownerID: $0.ownerID, title: $0.title).encoded
+        }
+    }
 }
 
 #if DEBUG
@@ -167,6 +235,7 @@ enum DebugLaunchOptions {
             case "link": controller.showLinkEditor()
             case "shapes": controller.presentSheet { dismiss in ShapeGalleryView { _ in dismiss() } }
             case "print": controller.ppPrintSettings(nil)
+            case "settings": SettingsWindowController.show()
             case "collaborate":
                 DispatchQueue.main.asyncAfter(deadline: .now() + (defaults.bool(forKey: "PPCollaborationDemo") ? 1.6 : 0)) {
                     controller.showCollaborate()
@@ -255,7 +324,9 @@ enum DebugLaunchOptions {
             guard let documentWindow = openedWindow?.window ?? NSApp.windows.first(where: { $0.windowController is DocumentWindowController }),
                   case let about = NSApp.windows.first(where: { $0.windowController is AboutWindowController && $0.isVisible }),
                   case let panel = defaults.bool(forKey: "PPSnapshotPanel") ? documentWindow.childWindows?.first : nil,
-                  case let window = slideshow ?? about ?? documentWindow.attachedSheet ?? panel ?? documentWindow,
+                  case let update = NSApp.windows.first(where: { $0.windowController is UpdateWindowController && $0.isVisible }),
+                  case let window = update ?? SettingsWindowController.visibleWindow ?? slideshow ?? about ?? documentWindow.attachedSheet
+                      ?? panel ?? documentWindow,
                   let view = window.contentView?.superview ?? window.contentView else {
                 print("PPSnapshot: no document window")
                 NSApp.terminate(nil)

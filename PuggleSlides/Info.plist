@@ -4,6 +4,8 @@
 <dict>
 	<key>CKSharingSupported</key>
 	<true/>
+	<key>PuggleUpdateURL</key>
+	<string>https://github.com/StaticPrime/PuggleSlides/releases/latest/download/update.json</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

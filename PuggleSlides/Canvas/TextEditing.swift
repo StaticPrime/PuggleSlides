@@ -45,6 +45,12 @@ final class SlideTextView: NSTextView, LocalUndo {
     override func insertNewline(_ sender: Any?) {
         if session?.endListOnEmptyParagraph() == true { return }
         super.insertNewline(sender)
+        capitalizeWord(afterTyping: "\n")
+    }
+
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        super.insertText(string, replacementRange: replacementRange)
+        capitalizeWord(afterTyping: string)
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -114,9 +120,7 @@ final class SlideTextEditor: NSObject, NSTextViewDelegate {
         textView.textContainer?.widthTracksTextView = true
         textView.usesFontPanel = false
         textView.usesFindBar = false
-        textView.isAutomaticQuoteSubstitutionEnabled = true
-        textView.isAutomaticDashSubstitutionEnabled = true
-        textView.isContinuousSpellCheckingEnabled = UserDefaults.standard.object(forKey: "PPSpellCheck") as? Bool ?? true
+        TypingPreferences.apply(to: textView)
         textView.smartInsertDeleteEnabled = true
         textView.linkTextAttributes = [:]
         textView.insertionPointColor = .black
@@ -268,6 +272,18 @@ final class SlideTextEditor: NSObject, NSTextViewDelegate {
     func textViewDidChangeSelection(_ notification: Notification) {
         updateTrailingBullet()
         canvas?.onEditingChange?()
+    }
+
+    /// Keeps macOS's own capitals out, so Settings ▸ Automatically capitalize words decides (see `TypingPreferences`).
+    func textView(_ view: NSTextView, willCheckTextIn range: NSRange, options: [NSSpellChecker.OptionKey: Any] = [:],
+                  types checkingTypes: UnsafeMutablePointer<NSTextCheckingTypes>) -> [NSSpellChecker.OptionKey: Any] {
+        TypingPreferences.checkingOptions(options)
+    }
+
+    func textView(_ view: NSTextView, didCheckTextIn range: NSRange, types checkingTypes: NSTextCheckingTypes,
+                  options: [NSSpellChecker.OptionKey: Any] = [:], results: [NSTextCheckingResult], orthography: NSOrthography,
+                  wordCount: Int) -> [NSTextCheckingResult] {
+        TypingPreferences.withoutCapitals(results, in: view.textStorage?.mutableString ?? "")
     }
 
     private func updateTrailingBullet() {

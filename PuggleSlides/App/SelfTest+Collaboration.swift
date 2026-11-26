@@ -167,15 +167,6 @@ final class CollaborationSelfTest {
         cloud.changed(id)
     }
 
-    /// Runs `work` once `window` is the key window: a window brought to the front becomes key a moment later.
-    private static func whenKey(_ window: NSWindow?, attempt: Int = 0, _ work: @escaping () -> Void) {
-        if NSApp.keyWindow === window || attempt >= 40 {
-            work()
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { whenKey(window, attempt: attempt + 1, work) }
-        }
-    }
-
     private func defineSteps() {
         // MARK: Renaming
 
@@ -188,10 +179,11 @@ final class CollaborationSelfTest {
         step("Rename selects the whole name in the header, ready to type over") {
             self.renameRequestsBefore = self.window.state.renameRequest
             self.titleBeforeRename = self.window.state.title
-            self.window.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate()
-            // As File ▸ Rename is chosen: from the window in front, once it is.
-            Self.whenKey(self.window.window) { NSApp.sendAction(NSSelectorFromString("renameDocument:"), to: nil, from: nil) }
+            // As File ▸ Rename does for the window in front: the standard rename command, up this window's responder
+            // chain. Sent this way it doesn't need PuggleSlides to be the frontmost app, which a self-test started from
+            // a script may not be allowed to become.
+            let window = self.window.window
+            _ = (window?.firstResponder ?? window)?.tryToPerform(NSSelectorFromString("renameDocument:"), with: nil)
         } until: {
             guard self.window.state.renameRequest > self.renameRequestsBefore,
                   let field = self.window.window?.firstResponder as? NSTextView, field.isFieldEditor, !field.string.isEmpty

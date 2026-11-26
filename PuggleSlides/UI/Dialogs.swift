@@ -41,7 +41,7 @@ struct ShortcutsView: View {
             ("Text", [
                 ("Bold / italic / underline", "⌘B / ⌘I / ⌘U"),
                 ("Strikethrough", "⇧⌘X"),
-                ("Superscript / subscript", "⌘. / ⌘,"),
+                ("Superscript", "⌘."),
                 ("Bigger / smaller text", "⇧⌘. / ⇧⌘,"),
                 ("Align left / center / right", "⇧⌘L / ⇧⌘E / ⇧⌘R"),
                 ("Justify", "⇧⌘J"),
@@ -329,31 +329,5 @@ struct AltTextView: View {
         }
         .padding(24)
         .frame(width: 440)
-    }
-}
-
-/// Tools ▸ Preferences.
-struct PreferencesView: View {
-    let dismiss: () -> Void
-    @AppStorage("PPSmartQuotes") private var smartQuotes = true
-    @AppStorage("PPSmartDashes") private var smartDashes = true
-    @AppStorage("PPSpellCheck") private var spellCheck = true
-    @AppStorage("PPAutoCapitalize") private var capitalize = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Preferences").font(.system(size: 20))
-            Toggle("Use smart quotes", isOn: $smartQuotes)
-            Toggle("Use smart dashes", isOn: $smartDashes)
-            Toggle("Automatically capitalize words", isOn: $capitalize)
-            Toggle("Check spelling as you type", isOn: $spellCheck)
-            HStack {
-                Spacer()
-                PanelButton(title: "OK", action: dismiss).keyboardShortcut(.defaultAction)
-            }
-        }
-        .font(.system(size: 13))
-        .padding(24)
-        .frame(width: 360)
     }
 }

@@ -1,0 +1,9 @@
+// Signing for the update installer service (UpdateInstaller.xpc) in debug builds: the same as the app's (see
+// Debug.xcconfig), so with Config/Signing.xcconfig it's signed by the same team as the app, and can check that an
+// update is signed by the app's developer. Unlike the app it isn't sandboxed and needs no provisioning profile, so it
+// takes neither the app's entitlements nor its profile.
+
+#include "Debug.xcconfig"
+
+CODE_SIGN_ENTITLEMENTS =
+PROVISIONING_PROFILE_SPECIFIER =

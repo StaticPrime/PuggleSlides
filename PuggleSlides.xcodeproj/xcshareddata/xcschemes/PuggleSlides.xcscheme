@@ -38,6 +38,16 @@
                ReferencedContainer = "container:Packages/PuggleSlidesKit">
             </BuildableReference>
          </TestableReference>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "PuggleUpdateTests"
+               BuildableName = "PuggleUpdateTests"
+               BlueprintName = "PuggleUpdateTests"
+               ReferencedContainer = "container:Packages/PuggleSlidesKit">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction

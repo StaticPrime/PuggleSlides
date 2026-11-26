@@ -327,7 +327,10 @@ extension CollaborationController: UNUserNotificationCenterDelegate {
         Task { @MainActor in
             guard let (id, owner) = target, let controller = CollaborationController.shared else { return }
             let entry = controller.sharedWithMe.first { $0.id == id } ?? SharedDocumentEntry(id: id, title: "Shared presentation", ownerName: "", ownerID: owner)
-            controller.openShared(entry)
+            // A notice clicked while PuggleSlides isn't open opens its presentation once PuggleSlides has.
+            UpdateController.shared.whenLaunched(handoff: LaunchHandoff.shared(id: id, ownerID: owner, title: entry.title).encoded) {
+                controller.openShared(entry)
+            }
         }
         completionHandler()
     }

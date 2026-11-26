@@ -17,6 +17,16 @@ final class NotesTextView: NSTextView, LocalUndo {
         return super.validateUserInterfaceItem(item)
     }
 
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        super.insertText(string, replacementRange: replacementRange)
+        capitalizeWord(afterTyping: string)
+    }
+
+    override func insertNewline(_ sender: Any?) {
+        super.insertNewline(sender)
+        capitalizeWord(afterTyping: "\n")
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         if string.isEmpty, window?.firstResponder !== self {
@@ -70,7 +80,7 @@ final class SpeakerNotesView: NSScrollView, NSTextViewDelegate {
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
         textView.usesFontPanel = false
-        textView.isAutomaticQuoteSubstitutionEnabled = true
+        TypingPreferences.apply(to: textView)
         textView.delegate = self
         textView.typingAttributes = Self.attributes(bold: false, italic: false, underline: false)
         textView.onFocusChange = { [weak self] focused in if !focused { self?.commit() } }
@@ -160,6 +170,18 @@ final class SpeakerNotesView: NSScrollView, NSTextViewDelegate {
         let work = DispatchWorkItem { [weak self] in self?.commit() }
         liveCommit = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
+    }
+
+    /// Keeps macOS's own capitals out, so Settings ▸ Automatically capitalize words decides (see `TypingPreferences`).
+    func textView(_ view: NSTextView, willCheckTextIn range: NSRange, options: [NSSpellChecker.OptionKey: Any] = [:],
+                  types checkingTypes: UnsafeMutablePointer<NSTextCheckingTypes>) -> [NSSpellChecker.OptionKey: Any] {
+        TypingPreferences.checkingOptions(options)
+    }
+
+    func textView(_ view: NSTextView, didCheckTextIn range: NSRange, types checkingTypes: NSTextCheckingTypes,
+                  options: [NSSpellChecker.OptionKey: Any] = [:], results: [NSTextCheckingResult], orthography: NSOrthography,
+                  wordCount: Int) -> [NSTextCheckingResult] {
+        TypingPreferences.withoutCapitals(results, in: view.textStorage?.mutableString ?? "")
     }
 
     func commit() {

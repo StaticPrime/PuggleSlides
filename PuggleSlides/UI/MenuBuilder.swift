@@ -108,7 +108,6 @@ import PuggleSlidesKit
     func ppGroup(_ sender: Any?)
     func ppUngroup(_ sender: Any?)
     func ppToggleSpellCheck(_ sender: Any?)
-    func ppPreferences(_ sender: Any?)
     func ppShowShortcuts(_ sender: Any?)
     // Sharing through iCloud.
     func ppCollaborate(_ sender: Any?)
@@ -211,6 +210,8 @@ enum MenuBuilder {
     static func makeAppMenu() -> NSMenu {
         let menu = NSMenu(title: "PuggleSlides")
         menu.addItem(item("About PuggleSlides", #selector(AppDelegate.showAboutWindow(_:))))
+        menu.addItem(.separator())
+        menu.addItem(item("Settings…", #selector(AppDelegate.showSettings(_:)), ","))
         menu.addItem(.separator())
         let services = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
         let servicesMenu = NSMenu(title: "Services")
@@ -563,7 +564,8 @@ enum MenuBuilder {
                 item("Underline", #selector(SlideCommands.ppToggleUnderline(_:)), "u", symbol: "underline"),
                 item("Strikethrough", #selector(SlideCommands.ppToggleStrikethrough(_:)), "x", [.command, .shift], symbol: "strikethrough"),
                 item("Superscript", #selector(SlideCommands.ppSuperscript(_:)), ".", symbol: "textformat.superscript"),
-                item("Subscript", #selector(SlideCommands.ppSubscript(_:)), ",", symbol: "textformat.subscript"),
+                // No shortcut: ⌘, is PuggleSlides ▸ Settings…, as in every Mac app.
+                item("Subscript", #selector(SlideCommands.ppSubscript(_:)), symbol: "textformat.subscript"),
                 .separator(),
                 submenu("Size", [
                     item("Increase font size", #selector(SlideCommands.ppIncreaseFontSize(_:)), ".", [.command, .shift]),
@@ -670,7 +672,8 @@ enum MenuBuilder {
                 item("Spell check", #selector(SlideCommands.ppToggleSpellCheck(_:))),
             ]),
             .separator(),
-            item("Preferences…", #selector(SlideCommands.ppPreferences(_:)), symbol: "gearshape"),
+            // The same window as PuggleSlides ▸ Settings…, which has the shortcut.
+            item("Settings…", #selector(AppDelegate.showSettings(_:)), symbol: "gearshape"),
         ]
     }
 }

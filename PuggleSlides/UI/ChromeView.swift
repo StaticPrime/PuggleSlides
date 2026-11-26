@@ -11,6 +11,8 @@ enum ToolbarMenu {
 /// What the header and toolbar ask their window to do.
 protocol ChromeActions: AnyObject {
     var controller: PresentationController { get }
+    /// The window the header and toolbar are in.
+    var window: NSWindow? { get }
     func popUp(_ menu: ToolbarMenu, from view: NSView?)
     func rename(to title: String)
     func showVersionHistory()
@@ -58,7 +60,7 @@ enum ColorTarget {
     case fill, border, text, highlight, background
 }
 
-/// Header, toolbar and info banner above the canvas.
+/// Header, toolbar, and the update and info banners above the canvas.
 struct ChromeView: View {
     let state: EditorState
     let actions: ChromeActions
@@ -74,6 +76,7 @@ struct ChromeView: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 6)
             }
+            UpdateBannerView(banner: UpdateController.shared.banner)
             if let banner = state.banner {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "info.circle.fill").foregroundStyle(Color.orange)
@@ -183,9 +186,10 @@ struct HeaderView: View {
         .onExitCommand { titleText = state.title; titleFocused = false; actions.focusCanvas() }
     }
 
-    /// File ▸ Rename: once the name's field is being edited, all of the name is selected, so typing replaces it.
+    /// File ▸ Rename: once the name's field is being edited, all of the name is selected, so typing replaces it. The
+    /// field is in this header's own window, whichever window happens to be in front.
     private func selectWholeTitle(attempt: Int = 0) {
-        if let field = NSApp.keyWindow?.firstResponder as? NSTextView, field.isFieldEditor {
+        if let field = actions.window?.firstResponder as? NSTextView, field.isFieldEditor {
             field.selectAll(nil)
         } else if attempt < 10 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { selectWholeTitle(attempt: attempt + 1) }
