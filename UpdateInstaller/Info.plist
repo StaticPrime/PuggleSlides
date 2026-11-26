@@ -30,6 +30,8 @@
 		<string>Application</string>
 		<key>RunLoopType</key>
 		<string>NSRunLoop</string>
+		<key>JoinExistingSession</key>
+		<true/>
 	</dict>
 </dict>
 </plist>

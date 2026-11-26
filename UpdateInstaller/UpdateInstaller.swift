@@ -1,10 +1,24 @@
 import Foundation
 import os
 import PuggleUpdate
+import Security
 
 /// What the service did, in the Mac's log under the app's subsystem (category Updates).
 let log = Logger(subsystem: Bundle.main.bundleIdentifier.map { $0.replacingOccurrences(of: ".UpdateInstaller", with: "") } ?? "com.pugglesoft",
                  category: "Updates")
+
+/// The security session the service runs in. macOS asks for an administrator's password only from a session that can
+/// show windows. An XPC service gets a session of its own that can't, unless its Info.plist has it join its app's
+/// (XPCService ▸ JoinExistingSession); from one that can't, macOS refuses at once, with no dialog, and AppleScript says
+/// the password was wrong.
+enum SecuritySession {
+    static var canShowDialogs: Bool {
+        var session = SecuritySessionId()
+        var attributes = SessionAttributeBits()
+        guard SessionGetInfo(callerSecuritySession, &session, &attributes) == 0 else { return false }
+        return attributes.contains(.sessionHasGraphicAccess)
+    }
+}
 
 /// The update installer: an XPC service inside the app, outside its sandbox, that installs an update the app has
 /// downloaded (see `UpdateInstalling`). It accepts connections only from the app it's inside, signed by the same team.
@@ -18,6 +32,7 @@ final class UpdateInstallerDelegate: NSObject, NSXPCListenerDelegate {
         connection.remoteObjectInterface = UpdateInstallerService.observingInterface
         connection.exportedObject = PackageInstaller(connection: connection)
         connection.resume()
+        log.info("Update installer: in a session that \(SecuritySession.canShowDialogs ? "can" : "can’t", privacy: .public) show macOS’s password dialog")
         return true
     }
 }
@@ -136,6 +151,10 @@ final class PackageInstaller: NSObject, UpdateInstalling, @unchecked Sendable {
                 let said = InstallerProgress.parse(outcome.message ?? "").errors.first ?? outcome.message?.trimmingCharacters(in: .whitespacesAndNewlines)
                 return (nil, .failed, "macOS’s installer couldn’t install the update." + (said.map { " It said: \($0)" } ?? ""))
             default:
+                // AppleScript's own words would say the password was wrong, though no one was asked for it.
+                guard SecuritySession.canShowDialogs else {
+                    return (nil, .failed, "macOS couldn’t ask for an administrator’s password, so the update wasn’t installed.")
+                }
                 return (nil, .failed, "The update couldn’t be installed." + (outcome.message.map { " \($0)" } ?? ""))
             }
         }
@@ -187,8 +206,9 @@ final class PackageInstaller: NSObject, UpdateInstalling, @unchecked Sendable {
             }
             script.executeAndReturnError(&error)
             if let error {
-                result.number = (error[NSAppleScript.errorNumber] as? Int) ?? -1
+                result.number = (error[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? -1
                 result.message = error[NSAppleScript.errorMessage] as? String
+                log.info("Update installer: AppleScript reported \(error.description, privacy: .public)")
             }
         }
         return (result.number, result.message)
