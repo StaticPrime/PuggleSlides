@@ -98,7 +98,7 @@ Help ▸ Keyboard shortcuts (⌘/) lists every keyboard shortcut.
 ## Requirements
 
 - macOS 14 Sonoma or later
-- Xcode 16 or later (developed with Xcode 27.2, Swift 6)
+- Xcode 26 or later (developed with Xcode 27.2, Swift 6)
 
 ## Building and running
 
